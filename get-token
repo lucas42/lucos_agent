@@ -1,17 +1,39 @@
 #!/bin/bash
 # Generates a GitHub App installation access token for lucos_agent.
 # The token is printed to stdout and is valid for 1 hour.
+# Requires a .env file (from lucos_creds) in the same directory as this script.
 
 set -euo pipefail
 
 APP_ID="2943201"
 INSTALLATION_ID="112266755"
-PEM_FILE="$HOME/.claude/lucos_agent.pem"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/.env"
 
-if [[ ! -f "$PEM_FILE" ]]; then
-    echo "Error: private key not found at $PEM_FILE" >&2
+if [[ ! -f "$ENV_FILE" ]]; then
+    echo "Error: .env file not found at $ENV_FILE" >&2
     exit 1
 fi
+
+# Extract APP_PEM from .env and restore newlines.
+# lucos_creds flattens the key to a single line with spaces; base64 content
+# never contains spaces so replacing all spaces with newlines is safe.
+PEM_KEY=$(python3 -c "
+import re, sys
+with open('$ENV_FILE') as f:
+    content = f.read()
+match = re.search(r'APP_PEM=\"(.*?)\"', content, re.DOTALL)
+if not match:
+    print('Error: APP_PEM not found in .env', file=sys.stderr)
+    sys.exit(1)
+val = match.group(1)
+# lucos_creds flattens newlines to spaces; the header/footer contain spaces
+# too, so we parse them out, fix only the body, then reassemble.
+import re as re2
+m = re2.search(r'(-----BEGIN RSA PRIVATE KEY-----)(.*?)(-----END RSA PRIVATE KEY-----)', val, re2.DOTALL)
+body = m.group(2).strip().replace(' ', '\n')
+print(f'{m.group(1)}\n{body}\n{m.group(3)}')
+")
 
 # Base64url encode (no padding)
 b64url() {
@@ -23,9 +45,13 @@ NOW=$(date +%s)
 IAT=$((NOW - 60))
 EXP=$((NOW + 600))
 
+TMPKEY=$(mktemp)
+trap "rm -f $TMPKEY" EXIT
+echo "$PEM_KEY" > "$TMPKEY"
+
 HEADER=$(echo -n '{"alg":"RS256","typ":"JWT"}' | b64url)
 PAYLOAD=$(echo -n "{\"iat\":${IAT},\"exp\":${EXP},\"iss\":\"${APP_ID}\"}" | b64url)
-SIGNATURE=$(echo -n "${HEADER}.${PAYLOAD}" | openssl dgst -sha256 -sign "$PEM_FILE" | b64url)
+SIGNATURE=$(echo -n "${HEADER}.${PAYLOAD}" | openssl dgst -sha256 -sign "$TMPKEY" | b64url)
 JWT="${HEADER}.${PAYLOAD}.${SIGNATURE}"
 
 # Exchange JWT for an installation access token
