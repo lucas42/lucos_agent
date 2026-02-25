@@ -7,25 +7,21 @@ Actions taken with these credentials appear as `lucos_agent[bot]` in the GitHub 
 ## Contents
 
 - **`get-token`** — shell script that generates a short-lived GitHub installation access token (valid 1 hour), printed to stdout
+- **`gh-as-agent`** — wrapper around `gh api` that handles token generation internally; use this instead of calling `gh api` directly
 
 ## Usage
 
-Pull credentials from lucos_creds, then run the script:
+Pull credentials from lucos_creds, then use `gh-as-agent` to make GitHub API calls:
 
 ```bash
 scp -P 2202 "creds.l42.eu:lucos_agent/development/.env" .
-TOKEN=$(./get-token)
-```
-
-Use the token to make GitHub API calls, e.g. creating an issue:
-
-```bash
-gh api repos/lucas42/{repo}/issues \
-    -H "Authorization: token $TOKEN" \
+./gh-as-agent repos/lucas42/{repo}/issues \
     --method POST \
     -f title="Issue title" \
     -f body="Issue body"
 ```
+
+All `gh api` flags and arguments are passed through directly. There is no need to generate or manage tokens manually.
 
 ## How it works
 

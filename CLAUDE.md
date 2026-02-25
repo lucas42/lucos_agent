@@ -15,9 +15,26 @@ The app has **Issues: Read & Write** permission. The private key is stored in lu
 
 ---
 
+## gh-as-agent
+
+The `gh-as-agent` script is a wrapper around `gh api` that handles token generation internally. **This is the recommended way to make GitHub API calls as the lucos_agent bot.**
+
+### Usage
+
+```bash
+./gh-as-agent repos/lucas42/{repo}/issues \
+    --method POST \
+    -f title="Issue title" \
+    -f body="Issue body"
+```
+
+All `gh api` flags and arguments are passed through directly. There is no need to generate or manage tokens manually.
+
+---
+
 ## get-token
 
-The `get-token` script generates a short-lived GitHub installation access token (valid for 1 hour) and prints it to stdout.
+The `get-token` script generates a short-lived GitHub installation access token (valid for 1 hour) and prints it to stdout. Prefer using `gh-as-agent` over calling this directly.
 
 ### How it works
 
@@ -30,16 +47,6 @@ The JWT is assembled manually in bash:
 - Header and payload are base64url-encoded JSON
 - The signature is produced by `openssl dgst -sha256 -sign` using the RSA private key
 - The three parts are joined with `.`
-
-### Usage
-
-First ensure the `.env` file is present (see below), then:
-
-```bash
-TOKEN=$(./get-token)
-```
-
-Use the token with `gh api` by passing `-H "Authorization: token $TOKEN"`.
 
 ---
 
