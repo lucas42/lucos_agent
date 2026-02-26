@@ -1,41 +1,43 @@
 # lucos_agent
 
-This repo provides tooling for AI agents to interact with GitHub on the lucos infrastructure, authenticated as the **lucos_agent** GitHub App rather than as a personal user. Actions taken with these credentials appear as `lucos_agent[bot]` in the GitHub UI.
+This repo provides tooling for AI agents to interact with GitHub on the lucos infrastructure, authenticated as a lucos GitHub App rather than as a personal user. Actions taken with these credentials appear as bot accounts in the GitHub UI (e.g. `lucos-agent[bot]`).
 
 ## GitHub App details
 
-### lucos_agent (default)
+App names are the GitHub-normalised slugs (lowercase, spaces replaced with hyphens). Pass these to `--app` in `get-token` and `gh-as-agent`.
+
+### lucos-agent (default)
 
 | Field | Value |
 |---|---|
-| App name | `lucos_agent` |
+| Display name | `lucOS Agent` |
 | App ID | `2943201` |
 | Installation ID | `112266755` |
 | Installed on | `lucas42` (all repos) |
 
 The app has **Issues: Read & Write** permission. Private key stored in lucos_creds as `LUCOS_AGENT_PEM`.
 
-### lucos_issue_manager
+### lucos-issue-manager
 
 | Field | Value |
 |---|---|
-| App name | `lucos_issue_manager` |
+| Display name | `lucOS Issue Manager` |
 | App ID | `2952357` |
 | Installation ID | `112520892` |
 | Installed on | `lucas42` (all repos) |
 
-Used by the lucos-issue-manager Claude persona. Private key stored in lucos_creds as `LUCOS_ISSUE_MANAGER_PEM`.
+Used by the lucos-issue-manager Claude persona. The app has **Issues: Read & Write** permission. Private key stored in lucos_creds as `LUCOS_ISSUE_MANAGER_PEM`.
 
 ### lucos-code-reviewer
 
 | Field | Value |
 |---|---|
-| App name | `lucOS Code Reviewer` |
+| Display name | `lucOS Code Reviewer` |
 | App ID | `2956131` |
 | Installation ID | `112629982` |
 | Installed on | `lucas42` (all repos) |
 
-Private key stored in lucos_creds as `LUCOS_CODE_REVIEWER_PEM`.
+Used by the lucos-code-reviewer Claude persona. The app has **Pull requests: Read & Write** permission. Private key stored in lucos_creds as `LUCOS_CODE_REVIEWER_PEM`.
 
 ---
 
@@ -52,13 +54,13 @@ When the request body contains text (e.g. issue bodies, comments), write the pay
 # /tmp/gh-payload.json:
 # {"title": "Issue title", "body": "Issue body with `code` and **markdown**"}
 
-# Step 2: call gh-as-agent with --input (default: authenticates as lucos_agent)
+# Step 2: call gh-as-agent with --input (default: authenticates as lucos-agent)
 ./gh-as-agent repos/lucas42/{repo}/issues \
     --method POST \
     --input /tmp/gh-payload.json
 
-# Authenticate as lucos_issue_manager (use --app as the first argument)
-./gh-as-agent --app lucos_issue_manager repos/lucas42/{repo}/issues \
+# Authenticate as a specific app (use --app as the first argument)
+./gh-as-agent --app lucos-issue-manager repos/lucas42/{repo}/issues \
     --method POST \
     --input /tmp/gh-payload.json
 ```
@@ -99,8 +101,8 @@ All apps' RSA private keys are stored in lucos_creds and pulled down in a single
 
 | App | `.env` variable |
 |---|---|
-| `lucos_agent` | `LUCOS_AGENT_PEM` |
-| `lucos_issue_manager` | `LUCOS_ISSUE_MANAGER_PEM` |
+| `lucos-agent` | `LUCOS_AGENT_PEM` |
+| `lucos-issue-manager` | `LUCOS_ISSUE_MANAGER_PEM` |
 | `lucos-code-reviewer` | `LUCOS_CODE_REVIEWER_PEM` |
 
 Pull down the `.env` file with:

@@ -4,7 +4,7 @@
 # Requires a .env file (from lucos_creds) in the same directory as this script.
 #
 # Usage: get-token [--app <app_name>]
-#   app_name: lucos_agent (default) | lucos_issue_manager | lucos-code-reviewer
+#   app_name: lucos-agent (default) | lucos-issue-manager | lucos-code-reviewer
 
 set -euo pipefail
 
@@ -12,19 +12,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/.env"
 
 # Parse --app flag
-APP_NAME="lucos_agent"
+APP_NAME="lucos-agent"
 if [[ "${1:-}" == "--app" ]]; then
     APP_NAME="${2:?--app requires an argument}"
     shift 2
 fi
 
 case "$APP_NAME" in
-    lucos_agent)
+    lucos-agent)
         APP_ID="2943201"
         INSTALLATION_ID="112266755"
         PEM_VAR="LUCOS_AGENT_PEM"
         ;;
-    lucos_issue_manager)
+    lucos-issue-manager)
         APP_ID="2952357"
         INSTALLATION_ID="112520892"
         PEM_VAR="LUCOS_ISSUE_MANAGER_PEM"
@@ -35,7 +35,7 @@ case "$APP_NAME" in
         PEM_VAR="LUCOS_CODE_REVIEWER_PEM"
         ;;
     *)
-        echo "Error: Unknown app '$APP_NAME'. Valid options: lucos_agent, lucos_issue_manager, lucos-code-reviewer" >&2
+        echo "Error: Unknown app '$APP_NAME'. Valid options: lucos-agent, lucos-issue-manager, lucos-code-reviewer" >&2
         exit 1
         ;;
 esac

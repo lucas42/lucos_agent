@@ -2,7 +2,7 @@
 
 A GitHub App used by AI agents to interact with GitHub on the [lucos](https://github.com/lucas42/lucos) infrastructure.
 
-Actions taken with these credentials appear as `lucos_agent[bot]` in the GitHub UI, keeping bot activity clearly distinct from human activity.
+Actions taken with these credentials appear as bot accounts in the GitHub UI (e.g. `lucos-agent[bot]`), keeping bot activity clearly distinct from human activity.
 
 ## Contents
 

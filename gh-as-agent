@@ -3,7 +3,7 @@
 # Handles token generation internally — no need to manage tokens manually.
 #
 # Usage: gh-as-agent [--app <app_name>] <gh api arguments>
-#   app_name: lucos_agent (default) | lucos_issue_manager
+#   app_name: lucos-agent (default) | lucos-issue-manager | lucos-code-reviewer
 # e.g.:  gh-as-agent repos/lucas42/lucos/issues --method POST -f title="..." -f body="..."
 
 set -euo pipefail
