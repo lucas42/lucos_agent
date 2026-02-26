@@ -26,6 +26,17 @@ The app has **Issues: Read & Write** permission. Private key stored in lucos_cre
 
 Used by the lucos-issue-manager Claude persona. Private key stored in lucos_creds as `LUCOS_ISSUE_MANAGER_PEM`.
 
+### lucos-code-reviewer
+
+| Field | Value |
+|---|---|
+| App name | `lucOS Code Reviewer` |
+| App ID | `2956131` |
+| Installation ID | `112629982` |
+| Installed on | `lucas42` (all repos) |
+
+Private key stored in lucos_creds as `LUCOS_CODE_REVIEWER_PEM`.
+
 ---
 
 ## gh-as-agent
@@ -84,12 +95,13 @@ The JWT is assembled manually in bash:
 
 ## Private keys and lucos_creds
 
-Both apps' RSA private keys are stored in lucos_creds and pulled down in a single `.env` file:
+All apps' RSA private keys are stored in lucos_creds and pulled down in a single `.env` file:
 
 | App | `.env` variable |
 |---|---|
 | `lucos_agent` | `LUCOS_AGENT_PEM` |
 | `lucos_issue_manager` | `LUCOS_ISSUE_MANAGER_PEM` |
+| `lucos-code-reviewer` | `LUCOS_CODE_REVIEWER_PEM` |
 
 Pull down the `.env` file with:
 
