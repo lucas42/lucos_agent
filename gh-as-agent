@@ -1,13 +1,22 @@
 #!/bin/bash
-# Wrapper around `gh api` that authenticates as the lucos_agent GitHub App.
+# Wrapper around `gh api` that authenticates as a lucos GitHub App.
 # Handles token generation internally — no need to manage tokens manually.
 #
-# Usage: gh-as-agent <gh api arguments>
+# Usage: gh-as-agent [--app <app_name>] <gh api arguments>
+#   app_name: lucos_agent (default) | lucos_issue_manager
 # e.g.:  gh-as-agent repos/lucas42/lucos/issues --method POST -f title="..." -f body="..."
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TOKEN=$("$SCRIPT_DIR/get-token")
+
+# Parse --app flag (must be first argument if present)
+if [[ "${1:-}" == "--app" ]]; then
+    APP_NAME="${2:?--app requires an argument}"
+    shift 2
+    TOKEN=$("$SCRIPT_DIR/get-token" --app "$APP_NAME")
+else
+    TOKEN=$("$SCRIPT_DIR/get-token")
+fi
 
 gh api -H "Authorization: token $TOKEN" "$@"

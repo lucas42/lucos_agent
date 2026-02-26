@@ -4,6 +4,8 @@ This repo provides tooling for AI agents to interact with GitHub on the lucos in
 
 ## GitHub App details
 
+### lucos_agent (default)
+
 | Field | Value |
 |---|---|
 | App name | `lucos_agent` |
@@ -11,18 +13,36 @@ This repo provides tooling for AI agents to interact with GitHub on the lucos in
 | Installation ID | `112266755` |
 | Installed on | `lucas42` (all repos) |
 
-The app has **Issues: Read & Write** permission. The private key is stored in lucos_creds (see below).
+The app has **Issues: Read & Write** permission. Private key stored in lucos_creds as `LUCOS_AGENT_PEM`.
+
+### lucos_issue_manager
+
+| Field | Value |
+|---|---|
+| App name | `lucos_issue_manager` |
+| App ID | `2952357` |
+| Installation ID | `112520892` |
+| Installed on | `lucas42` (all repos) |
+
+Used by the lucos-issue-manager Claude persona. Private key stored in lucos_creds as `LUCOS_ISSUE_MANAGER_PEM`.
 
 ---
 
 ## gh-as-agent
 
-The `gh-as-agent` script is a wrapper around `gh api` that handles token generation internally. **This is the recommended way to make GitHub API calls as the lucos_agent bot.**
+The `gh-as-agent` script is a wrapper around `gh api` that handles token generation internally. **This is the recommended way to make GitHub API calls as a lucos bot.**
 
 ### Usage
 
 ```bash
+# Default: authenticates as lucos_agent
 ./gh-as-agent repos/lucas42/{repo}/issues \
+    --method POST \
+    -f title="Issue title" \
+    -f body="Issue body"
+
+# Authenticate as lucos_issue_manager (use --app as the first argument)
+./gh-as-agent --app lucos_issue_manager repos/lucas42/{repo}/issues \
     --method POST \
     -f title="Issue title" \
     -f body="Issue body"
@@ -50,9 +70,16 @@ The JWT is assembled manually in bash:
 
 ---
 
-## APP_PEM and lucos_creds
+## Private keys and lucos_creds
 
-The RSA private key is stored in lucos_creds as a variable called `APP_PEM`. Pull down the `.env` file with:
+Both apps' RSA private keys are stored in lucos_creds and pulled down in a single `.env` file:
+
+| App | `.env` variable |
+|---|---|
+| `lucos_agent` | `LUCOS_AGENT_PEM` |
+| `lucos_issue_manager` | `LUCOS_ISSUE_MANAGER_PEM` |
+
+Pull down the `.env` file with:
 
 ```bash
 scp -P 2202 "creds.l42.eu:lucos_agent/development/.env" .

@@ -1,30 +1,55 @@
 #!/bin/bash
-# Generates a GitHub App installation access token for lucos_agent.
+# Generates a GitHub App installation access token.
 # The token is printed to stdout and is valid for 1 hour.
 # Requires a .env file (from lucos_creds) in the same directory as this script.
+#
+# Usage: get-token [--app <app_name>]
+#   app_name: lucos_agent (default) | lucos_issue_manager
 
 set -euo pipefail
 
-APP_ID="2943201"
-INSTALLATION_ID="112266755"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/.env"
+
+# Parse --app flag
+APP_NAME="lucos_agent"
+if [[ "${1:-}" == "--app" ]]; then
+    APP_NAME="${2:?--app requires an argument}"
+    shift 2
+fi
+
+case "$APP_NAME" in
+    lucos_agent)
+        APP_ID="2943201"
+        INSTALLATION_ID="112266755"
+        PEM_VAR="LUCOS_AGENT_PEM"
+        ;;
+    lucos_issue_manager)
+        APP_ID="2952357"
+        INSTALLATION_ID="112520892"
+        PEM_VAR="LUCOS_ISSUE_MANAGER_PEM"
+        ;;
+    *)
+        echo "Error: Unknown app '$APP_NAME'. Valid options: lucos_agent, lucos_issue_manager" >&2
+        exit 1
+        ;;
+esac
 
 if [[ ! -f "$ENV_FILE" ]]; then
     echo "Error: .env file not found at $ENV_FILE" >&2
     exit 1
 fi
 
-# Extract APP_PEM from .env and restore newlines.
+# Extract PEM from .env and restore newlines.
 # lucos_creds flattens the key to a single line with spaces; base64 content
 # never contains spaces so replacing all spaces with newlines is safe.
 PEM_KEY=$(python3 -c "
 import re, sys
 with open('$ENV_FILE') as f:
     content = f.read()
-match = re.search(r'APP_PEM=\"(.*?)\"', content, re.DOTALL)
+match = re.search(r'${PEM_VAR}=\"(.*?)\"', content, re.DOTALL)
 if not match:
-    print('Error: APP_PEM not found in .env', file=sys.stderr)
+    print('Error: ${PEM_VAR} not found in .env', file=sys.stderr)
     sys.exit(1)
 val = match.group(1)
 # lucos_creds flattens newlines to spaces; the header/footer contain spaces
