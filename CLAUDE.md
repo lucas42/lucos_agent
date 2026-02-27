@@ -39,6 +39,17 @@ Used by the lucos-issue-manager Claude persona. The app has **Issues: Read & Wri
 
 Used by the lucos-code-reviewer Claude persona. The app has **Pull requests: Read & Write** permission. Private key stored in lucos_creds as `LUCOS_CODE_REVIEWER_PEM`.
 
+### lucos-system-administrator
+
+| Field | Value |
+|---|---|
+| Display name | `lucOS System Administrator` |
+| App ID | `2964745` |
+| Installation ID | `112861561` |
+| Installed on | `lucas42` (all repos) |
+
+Used by the lucos-system-administrator Claude persona. Private key stored in lucos_creds as `LUCOS_SYSTEM_ADMINISTRATOR_PEM`.
+
 ---
 
 ## gh-as-agent
@@ -104,6 +115,7 @@ All apps' RSA private keys are stored in lucos_creds and pulled down in a single
 | `lucos-agent` | `LUCOS_AGENT_PEM` |
 | `lucos-issue-manager` | `LUCOS_ISSUE_MANAGER_PEM` |
 | `lucos-code-reviewer` | `LUCOS_CODE_REVIEWER_PEM` |
+| `lucos-system-administrator` | `LUCOS_SYSTEM_ADMINISTRATOR_PEM` |
 
 Pull down the `.env` file with:
 
