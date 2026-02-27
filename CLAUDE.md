@@ -12,10 +12,13 @@ App names are the GitHub-normalised slugs (lowercase, spaces replaced with hyphe
 |---|---|
 | Display name | `lucOS Agent` |
 | App ID | `2943201` |
+| Bot user ID | `263775988` |
 | Installation ID | `112266755` |
 | Installed on | `lucas42` (all repos) |
 
 The app has **Issues: Read & Write** permission. Private key stored in lucos_creds as `LUCOS_AGENT_PEM`.
+
+**Important:** The App ID and the bot user ID are different numbers. For commits to show the app's avatar in GitHub's UI, the git committer email must use the **bot user ID**, not the App ID: `263775988+lucos-agent[bot]@users.noreply.github.com`. The user ID is obtained via `GET /users/lucos-agent%5Bbot%5D` → `.id`.
 
 ### lucos-issue-manager
 
