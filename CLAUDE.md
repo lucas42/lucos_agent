@@ -64,6 +64,18 @@ Used by the lucos-system-administrator Claude persona. Private key stored in luc
 
 Used by the lucos-site-reliability Claude persona. Private key stored in lucos_creds as `LUCOS_SITE_RELIABILITY_PEM`.
 
+### lucos-architect
+
+| Field | Value |
+|---|---|
+| Display name | `lucOS Architect` |
+| App ID | `2975941` |
+| Bot user ID | `264682300` |
+| Installation ID | `113162855` |
+| Installed on | `lucas42` (all repos) |
+
+Used by the lucos-architect Claude persona. Private key stored in lucos_creds as `LUCOS_ARCHITECT_PEM`.
+
 ---
 
 ## gh-as-agent
@@ -131,6 +143,7 @@ All apps' RSA private keys are stored in lucos_creds and pulled down in a single
 | `lucos-code-reviewer` | `LUCOS_CODE_REVIEWER_PEM` |
 | `lucos-system-administrator` | `LUCOS_SYSTEM_ADMINISTRATOR_PEM` |
 | `lucos-site-reliability` | `LUCOS_SITE_RELIABILITY_PEM` |
+| `lucos-architect` | `LUCOS_ARCHITECT_PEM` |
 
 Pull down the `.env` file with:
 
