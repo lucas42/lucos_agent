@@ -1,0 +1,90 @@
+#!/bin/bash
+# Returns a JSON list of GitHub issues that need review by the lucos-issue-manager persona.
+#
+# Inclusion criteria:
+#   - Open issues from all repositories owned by lucas42
+#   - Not labelled 'agent-approved'
+#   - Unlabelled issues: always included
+#   - Issues labelled 'needs-refining': included only if the most recent comment
+#     is NOT from lucos-issue-manager[bot] (or there are no comments yet)
+#
+# Output: JSON array of objects with keys: repo, number, title, url, labels
+#
+# Authentication: uses the lucos-issue-manager GitHub App via get-token.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOKEN=$("$SCRIPT_DIR/get-token" --app "lucos-issue-manager")
+
+# Wrapper: call GitHub API authenticated as lucos-issue-manager
+gh_api() {
+    gh api -H "Authorization: token $TOKEN" "$@"
+}
+
+# Fetch all repos owned by lucas42 (including private, using the authenticated token)
+REPOS=$(gh_api --paginate /users/lucas42/repos --jq '.[].full_name')
+
+issues_json="[]"
+
+while IFS= read -r REPO; do
+    # Fetch open issues for this repo, excluding pull requests (GitHub's issues API
+    # includes PRs; filter them out via the absence of a pull_request key).
+    # Also exclude issues labelled 'agent-approved'.
+    #
+    # We fetch all open issues and filter client-side so we can apply label logic.
+    REPO_ISSUES=$(gh_api --paginate \
+        "/repos/${REPO}/issues?state=open&per_page=100" \
+        --jq '[.[] | select(.pull_request == null)]' 2>/dev/null || echo "[]")
+
+    # Process each issue
+    while IFS= read -r ISSUE; do
+        NUMBER=$(echo "$ISSUE" | jq -r '.number')
+        TITLE=$(echo "$ISSUE" | jq -r '.title')
+        URL=$(echo "$ISSUE" | jq -r '.html_url')
+        LABELS=$(echo "$ISSUE" | jq -r '[.labels[].name]')
+
+        # Exclude if labelled 'agent-approved'
+        IS_AGENT_APPROVED=$(echo "$LABELS" | jq -r 'map(select(. == "agent-approved")) | length > 0')
+        if [[ "$IS_AGENT_APPROVED" == "true" ]]; then
+            continue
+        fi
+
+        # Check if labelled 'needs-refining'
+        IS_NEEDS_REFINING=$(echo "$LABELS" | jq -r 'map(select(. == "needs-refining")) | length > 0')
+
+        if [[ "$IS_NEEDS_REFINING" == "true" ]]; then
+            # Include only if the most recent comment is NOT from lucos-issue-manager[bot]
+            # (or there are no comments yet)
+            COMMENTS=$(gh_api \
+                "/repos/${REPO}/issues/${NUMBER}/comments?per_page=1&direction=desc" \
+                --jq '.' 2>/dev/null || echo "[]")
+
+            COMMENT_COUNT=$(echo "$COMMENTS" | jq 'length')
+            if [[ "$COMMENT_COUNT" -gt 0 ]]; then
+                LAST_COMMENTER=$(echo "$COMMENTS" | jq -r '.[0].user.login')
+                if [[ "$LAST_COMMENTER" == "lucos-issue-manager[bot]" ]]; then
+                    # Most recent comment is from us — skip this issue
+                    continue
+                fi
+            fi
+            # Either no comments, or last comment is not from lucos-issue-manager[bot] — include
+        fi
+        # Unlabelled issues (and needs-refining issues not excluded above) are included
+
+        # Append this issue to the results
+        ISSUE_ENTRY=$(jq -n \
+            --arg repo "$REPO" \
+            --argjson number "$NUMBER" \
+            --arg title "$TITLE" \
+            --arg url "$URL" \
+            --argjson labels "$LABELS" \
+            '{repo: $repo, number: $number, title: $title, url: $url, labels: $labels}')
+
+        issues_json=$(echo "$issues_json" | jq --argjson entry "$ISSUE_ENTRY" '. + [$entry]')
+
+    done < <(echo "$REPO_ISSUES" | jq -c '.[]' 2>/dev/null || true)
+
+done <<< "$REPOS"
+
+echo "$issues_json"
