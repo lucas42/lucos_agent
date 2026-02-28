@@ -53,6 +53,17 @@ Used by the lucos-code-reviewer Claude persona. The app has **Pull requests: Rea
 
 Used by the lucos-system-administrator Claude persona. Private key stored in lucos_creds as `LUCOS_SYSTEM_ADMINISTRATOR_PEM`.
 
+### lucos-site-reliability
+
+| Field | Value |
+|---|---|
+| Display name | `lucOS Site Reliability` |
+| App ID | `2974470` |
+| Installation ID | `113121310` |
+| Installed on | `lucas42` (all repos) |
+
+Used by the lucos-site-reliability Claude persona. Private key stored in lucos_creds as `LUCOS_SITE_RELIABILITY_PEM`.
+
 ---
 
 ## gh-as-agent
@@ -119,6 +130,7 @@ All apps' RSA private keys are stored in lucos_creds and pulled down in a single
 | `lucos-issue-manager` | `LUCOS_ISSUE_MANAGER_PEM` |
 | `lucos-code-reviewer` | `LUCOS_CODE_REVIEWER_PEM` |
 | `lucos-system-administrator` | `LUCOS_SYSTEM_ADMINISTRATOR_PEM` |
+| `lucos-site-reliability` | `LUCOS_SITE_RELIABILITY_PEM` |
 
 Pull down the `.env` file with:
 
