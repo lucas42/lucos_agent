@@ -1,0 +1,50 @@
+{
+  "lucos-agent": {
+    "display_name": "lucOS Agent",
+    "bot_name": "lucos-agent[bot]",
+    "bot_user_id": "263775988",
+    "app_id": "2943201",
+    "installation_id": "112266755",
+    "pem_var": "LUCOS_AGENT_PEM"
+  },
+  "lucos-issue-manager": {
+    "display_name": "lucOS Issue Manager",
+    "bot_name": "lucos-issue-manager[bot]",
+    "bot_user_id": "264038870",
+    "app_id": "2952357",
+    "installation_id": "112520892",
+    "pem_var": "LUCOS_ISSUE_MANAGER_PEM"
+  },
+  "lucos-code-reviewer": {
+    "display_name": "lucOS Code Reviewer",
+    "bot_name": "lucOS Code Reviewer[bot]",
+    "bot_user_id": "264151378",
+    "app_id": "2956131",
+    "installation_id": "112629982",
+    "pem_var": "LUCOS_CODE_REVIEWER_PEM"
+  },
+  "lucos-system-administrator": {
+    "display_name": "lucOS System Administrator",
+    "bot_name": "lucos-system-administrator[bot]",
+    "bot_user_id": "264392982",
+    "app_id": "2964745",
+    "installation_id": "112861561",
+    "pem_var": "LUCOS_SYSTEM_ADMINISTRATOR_PEM"
+  },
+  "lucos-site-reliability": {
+    "display_name": "lucOS Site Reliability",
+    "bot_name": "lucos-site-reliability[bot]",
+    "bot_user_id": "264646982",
+    "app_id": "2974470",
+    "installation_id": "113121310",
+    "pem_var": "LUCOS_SITE_RELIABILITY_PEM"
+  },
+  "lucos-architect": {
+    "display_name": "lucOS Architect",
+    "bot_name": "lucos-architect[bot]",
+    "bot_user_id": "264682300",
+    "app_id": "2975941",
+    "installation_id": "113162855",
+    "pem_var": "LUCOS_ARCHITECT_PEM"
+  }
+}

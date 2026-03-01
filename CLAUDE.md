@@ -6,75 +6,11 @@ This repo provides tooling for AI agents to interact with GitHub on the lucos in
 
 App names are the GitHub-normalised slugs (lowercase, spaces replaced with hyphens). Pass these to `--app` in `get-token` and `gh-as-agent`.
 
-### lucos-agent (default)
+**Canonical identity data** for all personas (App ID, Installation ID, bot user ID, bot name, display name, PEM variable) is stored in [`personas.json`](personas.json) in this repo. This is the single source of truth — do not duplicate these values elsewhere.
 
-| Field | Value |
-|---|---|
-| Display name | `lucOS Agent` |
-| App ID | `2943201` |
-| Bot user ID | `263775988` |
-| Installation ID | `112266755` |
-| Installed on | `lucas42` (all repos) |
+**Important:** The App ID and the bot user ID are different numbers. For commits to show the app's avatar in GitHub's UI, the git committer email must use the **bot user ID**, not the App ID. The user ID is the `bot_user_id` field in `personas.json`. Using the App ID produces a grey ghost avatar.
 
-The app has **Issues: Read & Write** permission. Private key stored in lucos_creds as `LUCOS_AGENT_PEM`.
-
-**Important:** The App ID and the bot user ID are different numbers. For commits to show the app's avatar in GitHub's UI, the git committer email must use the **bot user ID**, not the App ID: `263775988+lucos-agent[bot]@users.noreply.github.com`. The user ID is obtained via `GET /users/lucos-agent%5Bbot%5D` → `.id`.
-
-### lucos-issue-manager
-
-| Field | Value |
-|---|---|
-| Display name | `lucOS Issue Manager` |
-| App ID | `2952357` |
-| Installation ID | `112520892` |
-| Installed on | `lucas42` (all repos) |
-
-Used by the lucos-issue-manager Claude persona. The app has **Issues: Read & Write** permission. Private key stored in lucos_creds as `LUCOS_ISSUE_MANAGER_PEM`.
-
-### lucos-code-reviewer
-
-| Field | Value |
-|---|---|
-| Display name | `lucOS Code Reviewer` |
-| App ID | `2956131` |
-| Installation ID | `112629982` |
-| Installed on | `lucas42` (all repos) |
-
-Used by the lucos-code-reviewer Claude persona. The app has **Pull requests: Read & Write** permission. Private key stored in lucos_creds as `LUCOS_CODE_REVIEWER_PEM`.
-
-### lucos-system-administrator
-
-| Field | Value |
-|---|---|
-| Display name | `lucOS System Administrator` |
-| App ID | `2964745` |
-| Installation ID | `112861561` |
-| Installed on | `lucas42` (all repos) |
-
-Used by the lucos-system-administrator Claude persona. Private key stored in lucos_creds as `LUCOS_SYSTEM_ADMINISTRATOR_PEM`.
-
-### lucos-site-reliability
-
-| Field | Value |
-|---|---|
-| Display name | `lucOS Site Reliability` |
-| App ID | `2974470` |
-| Installation ID | `113121310` |
-| Installed on | `lucas42` (all repos) |
-
-Used by the lucos-site-reliability Claude persona. Private key stored in lucos_creds as `LUCOS_SITE_RELIABILITY_PEM`.
-
-### lucos-architect
-
-| Field | Value |
-|---|---|
-| Display name | `lucOS Architect` |
-| App ID | `2975941` |
-| Bot user ID | `264682300` |
-| Installation ID | `113162855` |
-| Installed on | `lucas42` (all repos) |
-
-Used by the lucos-architect Claude persona. Private key stored in lucos_creds as `LUCOS_ARCHITECT_PEM`.
+All apps are installed on `lucas42` (all repos). Private keys are stored in lucos_creds; the `.env` variable name for each persona is the `pem_var` field in `personas.json`.
 
 ---
 
@@ -134,16 +70,7 @@ The JWT is assembled manually in bash:
 
 ## Private keys and lucos_creds
 
-All apps' RSA private keys are stored in lucos_creds and pulled down in a single `.env` file:
-
-| App | `.env` variable |
-|---|---|
-| `lucos-agent` | `LUCOS_AGENT_PEM` |
-| `lucos-issue-manager` | `LUCOS_ISSUE_MANAGER_PEM` |
-| `lucos-code-reviewer` | `LUCOS_CODE_REVIEWER_PEM` |
-| `lucos-system-administrator` | `LUCOS_SYSTEM_ADMINISTRATOR_PEM` |
-| `lucos-site-reliability` | `LUCOS_SITE_RELIABILITY_PEM` |
-| `lucos-architect` | `LUCOS_ARCHITECT_PEM` |
+All apps' RSA private keys are stored in lucos_creds and pulled down in a single `.env` file. The `.env` variable name for each persona's private key is the `pem_var` field in `personas.json`.
 
 Pull down the `.env` file with:
 
