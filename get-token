@@ -4,12 +4,13 @@
 # Requires a .env file (from lucos_creds) in the same directory as this script.
 #
 # Usage: get-token [--app <app_name>]
-#   app_name: lucos-agent (default) | lucos-issue-manager | lucos-code-reviewer | lucos-system-administrator | lucos-site-reliability | lucos-architect
+#   Persona names are defined in personas.json in the same directory as this script.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/.env"
+PERSONAS_FILE="$SCRIPT_DIR/personas.json"
 
 # Parse --app flag
 APP_NAME="lucos-agent"
@@ -18,42 +19,23 @@ if [[ "${1:-}" == "--app" ]]; then
     shift 2
 fi
 
-case "$APP_NAME" in
-    lucos-agent)
-        APP_ID="2943201"
-        INSTALLATION_ID="112266755"
-        PEM_VAR="LUCOS_AGENT_PEM"
-        ;;
-    lucos-issue-manager)
-        APP_ID="2952357"
-        INSTALLATION_ID="112520892"
-        PEM_VAR="LUCOS_ISSUE_MANAGER_PEM"
-        ;;
-    lucos-code-reviewer)
-        APP_ID="2956131"
-        INSTALLATION_ID="112629982"
-        PEM_VAR="LUCOS_CODE_REVIEWER_PEM"
-        ;;
-    lucos-system-administrator)
-        APP_ID="2964745"
-        INSTALLATION_ID="112861561"
-        PEM_VAR="LUCOS_SYSTEM_ADMINISTRATOR_PEM"
-        ;;
-    lucos-site-reliability)
-        APP_ID="2974470"
-        INSTALLATION_ID="113121310"
-        PEM_VAR="LUCOS_SITE_RELIABILITY_PEM"
-        ;;
-    lucos-architect)
-        APP_ID="2975941"
-        INSTALLATION_ID="113162855"
-        PEM_VAR="LUCOS_ARCHITECT_PEM"
-        ;;
-    *)
-        echo "Error: Unknown app '$APP_NAME'. Valid options: lucos-agent, lucos-issue-manager, lucos-code-reviewer, lucos-system-administrator, lucos-site-reliability, lucos-architect" >&2
-        exit 1
-        ;;
-esac
+if [[ ! -f "$PERSONAS_FILE" ]]; then
+    echo "Error: personas.json not found at $PERSONAS_FILE" >&2
+    exit 1
+fi
+
+# Look up persona identity from personas.json (zero network dependencies)
+read -r APP_ID INSTALLATION_ID PEM_VAR < <(python3 -c "
+import json, sys
+with open('$PERSONAS_FILE') as f:
+    personas = json.load(f)
+if '$APP_NAME' not in personas:
+    valid = ', '.join(sorted(personas.keys()))
+    print(f'Error: Unknown app \\'$APP_NAME\\'. Valid options: {valid}', file=sys.stderr)
+    sys.exit(1)
+p = personas['$APP_NAME']
+print(p['app_id'], p['installation_id'], p['pem_var'])
+")
 
 if [[ ! -f "$ENV_FILE" ]]; then
     echo "Error: .env file not found at $ENV_FILE" >&2
