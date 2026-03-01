@@ -72,7 +72,7 @@ NOW=$(date +%s)
 IAT=$((NOW - 60))
 EXP=$((NOW + 600))
 
-TMPKEY=$(mktemp)
+TMPKEY=$(mktemp 2>/dev/null || mktemp /tmp/tmp.XXXXXX)
 trap "rm -f $TMPKEY" EXIT
 echo "$PEM_KEY" > "$TMPKEY"
 
