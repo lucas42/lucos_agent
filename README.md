@@ -31,3 +31,13 @@ All `gh api` flags and arguments are passed through directly. There is no need t
 2. Exchanges the JWT for an installation access token via the GitHub API
 
 See `CLAUDE.md` for more technical detail, including notes on how the private key is stored in lucos_creds.
+
+
+## Instructions for adding a new app/persona
+
+1. Create the GitHub App and note the app_id (from the App's General settings page)
+2. Install it on the lucas42 org and note the installation_id (from the installation URL)
+3. Look up bot_user_id: curl -s 'https://api.github.com/users/<slug>%5Bbot%5D' | jq .id
+4. Check the login field in the same response for exact bot_name casing
+5. Add the private key to lucos_creds under a new variable
+6. Add the entry to ~/sandboxes/lucos_agent/personas.json
