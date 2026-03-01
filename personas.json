@@ -46,5 +46,13 @@
     "app_id": "2975941",
     "installation_id": "113162855",
     "pem_var": "LUCOS_ARCHITECT_PEM"
+  },
+  "lucos-security": {
+    "display_name": "lucOS Security",
+    "bot_name": "lucos-security[bot]",
+    "bot_user_id": "264791234",
+    "app_id": "2980891",
+    "installation_id": "113289939",
+    "pem_var": "LUCOS_SECURITY_PEM"
   }
 }
