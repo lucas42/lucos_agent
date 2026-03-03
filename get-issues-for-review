@@ -65,8 +65,8 @@ while IFS= read -r REPO; do
         if [[ "$INCLUDE" == "false" ]]; then
             IS_NEEDS_REFINING=$(echo "$LABELS" | jq -r 'map(select(. == "needs-refining")) | length > 0')
             if [[ "$IS_NEEDS_REFINING" == "true" ]]; then
-                COMMENTS=$(gh_api \
-                    "/repos/${REPO}/issues/${NUMBER}/comments?per_page=1&direction=desc" \
+                COMMENTS=$(gh_api --paginate \
+                    "/repos/${REPO}/issues/${NUMBER}/comments?per_page=100" \
                     --jq '.' 2>/dev/null || echo "[]")
 
                 COMMENT_COUNT=$(echo "$COMMENTS" | jq 'length')
@@ -74,7 +74,7 @@ while IFS= read -r REPO; do
                     # No comments yet — include for initial triage
                     INCLUDE="true"
                 else
-                    LAST_COMMENTER=$(echo "$COMMENTS" | jq -r '.[0].user.login')
+                    LAST_COMMENTER=$(echo "$COMMENTS" | jq -r '.[-1].user.login')
                     if [[ "$LAST_COMMENTER" != "lucos-issue-manager[bot]" ]]; then
                         # Someone else acted last — needs a triage pass
                         INCLUDE="true"
