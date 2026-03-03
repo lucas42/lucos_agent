@@ -62,5 +62,13 @@
     "app_id": "2983612",
     "installation_id": "113371277",
     "pem_var": "LUCOS_DEVELOPER_PEM"
+  },
+  "lucos-intern": {
+    "display_name": "lucOS Intern",
+    "bot_name": "lucos-intern[bot]",
+    "bot_user_id": "265302538",
+    "app_id": "2998021",
+    "installation_id": "113759059",
+    "pem_var": "LUCOS_INTERN_PEM"
   }
 }
