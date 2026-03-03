@@ -1,51 +1,71 @@
 #!/bin/bash
-# Returns a list of all open GitHub issues labeled with the given persona as the owner.
+# Returns a filtered list of open GitHub issues labeled with the given persona
+# as the owner.
 #
 # The owner label convention is: owner:<persona-name>
 # (e.g. "owner:lucos-system-administrator")
 #
-# Usage: get-issues-for-persona [--next] <persona-name>
-#   e.g. get-issues-for-persona lucos-system-administrator
-#        get-issues-for-persona --next lucos-system-administrator
+# Usage: get-issues-for-persona <--review|--implement> <persona-name>
+#   e.g. get-issues-for-persona --review lucos-system-administrator
+#        get-issues-for-persona --implement lucos-developer
 #
-# Options:
-#   --next   Output only the single highest-priority agent-approved non-blocked
-#            issue (for use with the "pick up next issue" implementation workflow).
+# Modes (exactly one required):
+#   --review     Return only needs-refining issues for this persona.
+#                These are issues needing design input, specialist review,
+#                or discussion -- not code changes.
+#
+#   --implement  Return only the single highest-priority agent-approved,
+#                non-blocked issue for this persona.  This is the next
+#                issue the persona should write code for.
+#
+# The two modes return non-overlapping sets of issues, determined entirely
+# by the issue's labels.
 #
 # Filtering:
-#   - Excludes issues with the 'status:blocked' label (waiting on a dependency)
+#   --review:    includes only issues with 'needs-refining' label
+#   --implement: includes only issues with 'agent-approved' label;
+#                excludes issues with 'status:blocked' label;
+#                returns at most one issue (highest priority, oldest first)
 #
-# Sorting:
+# Sorting (both modes):
 #   - priority:high first, then priority:medium, then priority:low, then
 #     unprioritised issues last.
 #   - Within each priority band, oldest issues first.
 #
-# Output: human-readable list grouped by repo (in sorted order), showing issue
-#         number, title, and URL.  Repos with no matching issues are silently
-#         skipped.  If there are no matching issues anywhere, a single
-#         informational line is printed.
-#         With --next: a single issue line (number, title, URL) or an
-#         informational message.
+# Output: human-readable list grouped by repo, showing issue number, title,
+#         and URL.  Repos with no matching issues are silently skipped.
+#         If there are no matching issues, a single informational line is
+#         printed.
 #
-# Authentication: uses the named persona's own GitHub App credentials via get-token.
+# Authentication: uses the named persona's own GitHub App credentials via
+#                 get-token.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PERSONAS_FILE="$SCRIPT_DIR/personas.json"
 
-NEXT_ONLY=false
+MODE=""
 
 # Parse flags
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --review)
+            MODE="review"
+            shift
+            ;;
+        --implement)
+            MODE="implement"
+            shift
+            ;;
         --next)
-            NEXT_ONLY=true
+            # Backward compatibility: --next is equivalent to --implement
+            MODE="implement"
             shift
             ;;
         -*)
             echo "Unknown flag: $1" >&2
-            echo "Usage: $(basename "$0") [--next] <persona-name>" >&2
+            echo "Usage: $(basename "$0") <--review|--implement> <persona-name>" >&2
             exit 1
             ;;
         *)
@@ -56,8 +76,15 @@ done
 
 # Require exactly one positional argument after flags
 if [[ $# -ne 1 ]]; then
-    echo "Usage: $(basename "$0") [--next] <persona-name>" >&2
-    echo "  e.g. $(basename "$0") lucos-system-administrator" >&2
+    echo "Usage: $(basename "$0") <--review|--implement> <persona-name>" >&2
+    echo "  e.g. $(basename "$0") --review lucos-system-administrator" >&2
+    echo "       $(basename "$0") --implement lucos-developer" >&2
+    exit 1
+fi
+
+if [[ -z "$MODE" ]]; then
+    echo "Error: must specify either --review or --implement" >&2
+    echo "Usage: $(basename "$0") <--review|--implement> <persona-name>" >&2
     exit 1
 fi
 
@@ -120,7 +147,7 @@ while IFS= read -r REPO; do
 done <<< "$REPOS"
 
 # Sort, filter, and format using Python (reads JSON from file, uses env vars for options)
-_GET_ISSUES_NEXT_ONLY="$NEXT_ONLY" \
+_GET_ISSUES_MODE="$MODE" \
 _GET_ISSUES_OWNER_LABEL="$OWNER_LABEL" \
 _GET_ISSUES_TMPFILE="$TMPFILE" \
 python3 << 'PYEOF'
@@ -129,7 +156,7 @@ import sys
 import os
 
 tmpfile = os.environ["_GET_ISSUES_TMPFILE"]
-next_only = os.environ.get("_GET_ISSUES_NEXT_ONLY") == "true"
+mode = os.environ.get("_GET_ISSUES_MODE", "")
 owner_label = os.environ.get("_GET_ISSUES_OWNER_LABEL", "")
 
 with open(tmpfile) as f:
@@ -142,16 +169,11 @@ PRIORITY_ORDER = {
 }
 UNPRIORITISED = 3
 
-# Filter out blocked issues
-filtered = []
-for issue in all_issues:
-    label_names = [l["name"] for l in issue.get("labels", [])]
-    if "status:blocked" in label_names:
-        continue
-    filtered.append(issue)
+def get_label_names(issue):
+    return [l["name"] for l in issue.get("labels", [])]
 
 def sort_key(issue):
-    label_names = [l["name"] for l in issue.get("labels", [])]
+    label_names = get_label_names(issue)
     priority = UNPRIORITISED
     for p, rank in PRIORITY_ORDER.items():
         if p in label_names:
@@ -160,21 +182,38 @@ def sort_key(issue):
     # created_at is ISO8601 — lexicographic sort is correct for oldest-first
     return (priority, issue.get("created_at", ""))
 
+# Filter based on mode
+filtered = []
+for issue in all_issues:
+    label_names = get_label_names(issue)
+
+    if mode == "review":
+        # Only include needs-refining issues
+        if "needs-refining" not in label_names:
+            continue
+    elif mode == "implement":
+        # Only include agent-approved, non-blocked issues
+        if "agent-approved" not in label_names:
+            continue
+        if "status:blocked" in label_names:
+            continue
+
+    filtered.append(issue)
+
 filtered.sort(key=sort_key)
 
 if not filtered:
-    print(f"No open issues found with label '{owner_label}'.")
+    if mode == "review":
+        print(f"No needs-refining issues found with label '{owner_label}'.")
+    elif mode == "implement":
+        print(f"No implementable issues found with label '{owner_label}'.")
     sys.exit(0)
 
-if next_only:
-    # For --next, only return agent-approved issues (skip needs-refining)
-    for issue in filtered:
-        label_names = [l["name"] for l in issue.get("labels", [])]
-        if "agent-approved" in label_names:
-            print(f"#{issue['number']} {issue['title']}")
-            print(f"  {issue['html_url']}")
-            sys.exit(0)
-    print(f"No agent-approved non-blocked issues found with label '{owner_label}'.")
+if mode == "implement":
+    # Return only the single highest-priority issue
+    issue = filtered[0]
+    print(f"#{issue['number']} {issue['title']}")
+    print(f"  {issue['html_url']}")
     sys.exit(0)
 
 # Human-readable output grouped by repo, preserving priority-sorted order
