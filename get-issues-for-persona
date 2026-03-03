@@ -1,0 +1,88 @@
+#!/bin/bash
+# Returns a list of all open GitHub issues labeled with the given persona as the owner.
+#
+# The owner label convention is: owner:<persona-name>
+# (e.g. "owner:lucos-system-administrator")
+#
+# Usage: get-issues-for-persona <persona-name>
+#   e.g. get-issues-for-persona lucos-system-administrator
+#
+# Output: human-readable list grouped by repo, showing issue number, title, and URL.
+#         Repos with no matching issues are silently skipped.
+#         If there are no matching issues anywhere, a single informational line is printed.
+#
+# Authentication: uses the named persona's own GitHub App credentials via get-token.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PERSONAS_FILE="$SCRIPT_DIR/personas.json"
+
+# Require exactly one argument
+if [[ $# -ne 1 ]]; then
+    echo "Usage: $(basename "$0") <persona-name>" >&2
+    echo "  e.g. $(basename "$0") lucos-system-administrator" >&2
+    exit 1
+fi
+
+PERSONA="$1"
+
+# Validate the persona exists in personas.json
+VALID=$(python3 -c "
+import json, sys
+with open('$PERSONAS_FILE') as f:
+    personas = json.load(f)
+if '$PERSONA' not in personas:
+    valid = ', '.join(sorted(personas.keys()))
+    print(f'Error: Unknown persona \\'$PERSONA\\'. Valid options: {valid}', file=sys.stderr)
+    sys.exit(1)
+print('ok')
+")
+
+if [[ "$VALID" != "ok" ]]; then
+    exit 1
+fi
+
+OWNER_LABEL="owner:${PERSONA}"
+
+TOKEN=$("$SCRIPT_DIR/get-token" --app "$PERSONA")
+
+# Wrapper: call GitHub API authenticated as the given persona
+gh_api() {
+    gh api -H "Authorization: token $TOKEN" "$@"
+}
+
+# Fetch all unarchived repos owned by lucas42.
+REPOS=$(gh_api --paginate /users/lucas42/repos --jq '.[] | select(.archived == false) | .full_name')
+
+total_issues=0
+
+while IFS= read -r REPO; do
+    # Fetch open issues for this repo with the owner label.
+    # GitHub's issues API includes PRs; filter them out by excluding anything
+    # with a pull_request field.
+    REPO_ISSUES=$(gh_api --paginate \
+        "/repos/${REPO}/issues?state=open&labels=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${OWNER_LABEL}'))")&per_page=100" \
+        --jq '[.[] | select(.pull_request == null)]' 2>/dev/null || echo "[]")
+
+    ISSUE_COUNT=$(echo "$REPO_ISSUES" | jq 'length')
+
+    if [[ "$ISSUE_COUNT" -eq 0 ]]; then
+        continue
+    fi
+
+    total_issues=$((total_issues + ISSUE_COUNT))
+
+    echo "=== ${REPO} (${ISSUE_COUNT} issue$([ "$ISSUE_COUNT" -eq 1 ] && echo "" || echo "s")) ==="
+
+    echo "$REPO_ISSUES" | jq -r '.[] |
+        "#\(.number) \(.title)\n  \(.html_url)"
+    '
+
+    echo ""
+
+done <<< "$REPOS"
+
+if [[ "$total_issues" -eq 0 ]]; then
+    echo "No open issues found with label '${OWNER_LABEL}'."
+fi
