@@ -1,0 +1,123 @@
+#!/bin/bash
+# Returns a JSON array of open Dependabot alerts across all unarchived repositories
+# owned by lucas42.
+#
+# For each alert, includes:
+#   - repo: full repo name (e.g. "lucas42/lucos_example")
+#   - alert_number: the alert's numeric ID within that repo
+#   - package_name: name of the vulnerable package
+#   - ecosystem: package ecosystem (npm, pip, etc.)
+#   - severity: critical, high, medium, or low
+#   - summary: one-line description of the vulnerability
+#   - html_url: link to the alert on GitHub
+#   - pull_request: null if no associated PR, otherwise an object with:
+#       - number: PR number
+#       - state: "open" (this script only looks at open PRs)
+#       - title: PR title
+#       - html_url: link to the PR on GitHub
+#
+# Repos where Dependabot alerts are disabled are silently skipped.
+# Repos where the app lacks access are silently skipped.
+#
+# PR matching: Dependabot PRs are matched to alerts by checking whether the PR
+# title (always "Bump <package> from <version> to <version>") contains the
+# package name as a substring. This is a heuristic but aligns with standard
+# Dependabot behaviour.
+#
+# Authentication: uses the lucos-security GitHub App via get-token.
+#
+# Output: JSON array (may be empty []).
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOKEN=$("$SCRIPT_DIR/get-token" --app "lucos-security")
+
+# Wrapper: call GitHub API authenticated as lucos-security.
+# Outputs the parsed JSON on success; outputs nothing and returns non-zero on error.
+gh_api() {
+    gh api -H "Authorization: token $TOKEN" "$@"
+}
+
+# Fetch all unarchived repos owned by lucas42.
+REPOS=$(gh_api --paginate /users/lucas42/repos --jq '.[] | select(.archived == false) | .full_name')
+
+alerts_json="[]"
+
+while IFS= read -r REPO; do
+    # Fetch open Dependabot alerts for this repo.
+    # Capture both the exit code and output separately to avoid the || fallback
+    # contaminating captured output (a pipefail + subshell subtlety).
+    # 403 = alerts disabled; 404 = no access. Both are silently skipped.
+    REPO_ALERTS_RAW=$(gh_api --paginate \
+        "/repos/${REPO}/dependabot/alerts?state=open&per_page=100" \
+        2>/dev/null) || REPO_ALERTS_RAW=""
+
+    if [[ -z "$REPO_ALERTS_RAW" ]]; then
+        continue
+    fi
+
+    # With --paginate (no --jq), multiple pages are output as separate JSON arrays
+    # on separate lines. Merge them into a single flat array.
+    REPO_ALERTS=$(echo "$REPO_ALERTS_RAW" | jq -s 'add // []')
+
+    ALERT_COUNT=$(echo "$REPO_ALERTS" | jq 'length')
+    if [[ "$ALERT_COUNT" -eq 0 ]]; then
+        continue
+    fi
+
+    # Fetch open PRs created by dependabot[bot] for this repo, to cross-reference
+    # against alerts. Dependabot PR titles follow the pattern:
+    #   "Bump <package> from <version> to <version>"
+    # We match by checking if the PR title contains the package name (case-insensitive).
+    DEPENDABOT_PRS=$(gh_api \
+        "/repos/${REPO}/pulls?state=open&per_page=100" \
+        --jq '[.[] | select(.user.login == "dependabot[bot]") | {
+            number: .number,
+            state: .state,
+            title: .title,
+            html_url: .html_url
+        }]' 2>/dev/null || echo "[]")
+
+    # Process each alert
+    while IFS= read -r ALERT; do
+        ALERT_NUMBER=$(echo "$ALERT" | jq -r '.number')
+        PACKAGE_NAME=$(echo "$ALERT" | jq -r '.dependency.package.name')
+        ECOSYSTEM=$(echo "$ALERT" | jq -r '.dependency.package.ecosystem')
+        SEVERITY=$(echo "$ALERT" | jq -r '.security_advisory.severity')
+        SUMMARY=$(echo "$ALERT" | jq -r '.security_advisory.summary')
+        ALERT_URL=$(echo "$ALERT" | jq -r '.html_url')
+
+        # Try to find a matching open Dependabot PR by package name appearing
+        # in the PR title (case-insensitive).
+        MATCHING_PR=$(echo "$DEPENDABOT_PRS" | jq \
+            --arg pkg "$PACKAGE_NAME" \
+            '[.[] | select(.title | ascii_downcase | contains($pkg | ascii_downcase))] | first // null')
+
+        ALERT_ENTRY=$(jq -n \
+            --arg repo "$REPO" \
+            --argjson alert_number "$ALERT_NUMBER" \
+            --arg package_name "$PACKAGE_NAME" \
+            --arg ecosystem "$ECOSYSTEM" \
+            --arg severity "$SEVERITY" \
+            --arg summary "$SUMMARY" \
+            --arg html_url "$ALERT_URL" \
+            --argjson pull_request "$MATCHING_PR" \
+            '{
+                repo: $repo,
+                alert_number: $alert_number,
+                package_name: $package_name,
+                ecosystem: $ecosystem,
+                severity: $severity,
+                summary: $summary,
+                html_url: $html_url,
+                pull_request: $pull_request
+            }')
+
+        alerts_json=$(echo "$alerts_json" | jq --argjson entry "$ALERT_ENTRY" '. + [$entry]')
+
+    done < <(echo "$REPO_ALERTS" | jq -c '.[]' 2>/dev/null || true)
+
+done <<< "$REPOS"
+
+echo "$alerts_json"
