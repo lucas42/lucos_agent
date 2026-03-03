@@ -4,12 +4,28 @@
 # The owner label convention is: owner:<persona-name>
 # (e.g. "owner:lucos-system-administrator")
 #
-# Usage: get-issues-for-persona <persona-name>
+# Usage: get-issues-for-persona [--next] <persona-name>
 #   e.g. get-issues-for-persona lucos-system-administrator
+#        get-issues-for-persona --next lucos-system-administrator
 #
-# Output: human-readable list grouped by repo, showing issue number, title, and URL.
-#         Repos with no matching issues are silently skipped.
-#         If there are no matching issues anywhere, a single informational line is printed.
+# Options:
+#   --next   Output only the single highest-priority agent-approved non-blocked
+#            issue (for use with the "pick up next issue" implementation workflow).
+#
+# Filtering:
+#   - Excludes issues with the 'status:blocked' label (waiting on a dependency)
+#
+# Sorting:
+#   - priority:high first, then priority:medium, then priority:low, then
+#     unprioritised issues last.
+#   - Within each priority band, oldest issues first.
+#
+# Output: human-readable list grouped by repo (in sorted order), showing issue
+#         number, title, and URL.  Repos with no matching issues are silently
+#         skipped.  If there are no matching issues anywhere, a single
+#         informational line is printed.
+#         With --next: a single issue line (number, title, URL) or an
+#         informational message.
 #
 # Authentication: uses the named persona's own GitHub App credentials via get-token.
 
@@ -18,9 +34,29 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PERSONAS_FILE="$SCRIPT_DIR/personas.json"
 
-# Require exactly one argument
+NEXT_ONLY=false
+
+# Parse flags
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --next)
+            NEXT_ONLY=true
+            shift
+            ;;
+        -*)
+            echo "Unknown flag: $1" >&2
+            echo "Usage: $(basename "$0") [--next] <persona-name>" >&2
+            exit 1
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+# Require exactly one positional argument after flags
 if [[ $# -ne 1 ]]; then
-    echo "Usage: $(basename "$0") <persona-name>" >&2
+    echo "Usage: $(basename "$0") [--next] <persona-name>" >&2
     echo "  e.g. $(basename "$0") lucos-system-administrator" >&2
     exit 1
 fi
@@ -55,7 +91,12 @@ gh_api() {
 # Fetch all unarchived repos owned by lucas42.
 REPOS=$(gh_api --paginate /users/lucas42/repos --jq '.[] | select(.archived == false) | .full_name')
 
-total_issues=0
+# Collect all matching issues into a temp file as a JSON array for sorting.
+# Each issue is annotated with the repo name.
+TMPFILE=$(mktemp)
+trap 'rm -f "$TMPFILE"' EXIT
+
+echo "[]" > "$TMPFILE"
 
 while IFS= read -r REPO; do
     # Fetch open issues for this repo with the owner label.
@@ -71,18 +112,93 @@ while IFS= read -r REPO; do
         continue
     fi
 
-    total_issues=$((total_issues + ISSUE_COUNT))
-
-    echo "=== ${REPO} (${ISSUE_COUNT} issue$([ "$ISSUE_COUNT" -eq 1 ] && echo "" || echo "s")) ==="
-
-    echo "$REPO_ISSUES" | jq -r '.[] |
-        "#\(.number) \(.title)\n  \(.html_url)"
-    '
-
-    echo ""
+    # Annotate each issue with its repo name, then append to the accumulated list
+    ANNOTATED=$(echo "$REPO_ISSUES" | jq --arg repo "$REPO" '[.[] | . + {_repo: $repo}]')
+    jq --argjson new "$ANNOTATED" '. + $new' "$TMPFILE" > "${TMPFILE}.new"
+    mv "${TMPFILE}.new" "$TMPFILE"
 
 done <<< "$REPOS"
 
-if [[ "$total_issues" -eq 0 ]]; then
-    echo "No open issues found with label '${OWNER_LABEL}'."
-fi
+# Sort, filter, and format using Python (reads JSON from file, uses env vars for options)
+_GET_ISSUES_NEXT_ONLY="$NEXT_ONLY" \
+_GET_ISSUES_OWNER_LABEL="$OWNER_LABEL" \
+_GET_ISSUES_TMPFILE="$TMPFILE" \
+python3 << 'PYEOF'
+import json
+import sys
+import os
+
+tmpfile = os.environ["_GET_ISSUES_TMPFILE"]
+next_only = os.environ.get("_GET_ISSUES_NEXT_ONLY") == "true"
+owner_label = os.environ.get("_GET_ISSUES_OWNER_LABEL", "")
+
+with open(tmpfile) as f:
+    all_issues = json.load(f)
+
+PRIORITY_ORDER = {
+    "priority:high": 0,
+    "priority:medium": 1,
+    "priority:low": 2,
+}
+UNPRIORITISED = 3
+
+# Filter out blocked issues
+filtered = []
+for issue in all_issues:
+    label_names = [l["name"] for l in issue.get("labels", [])]
+    if "status:blocked" in label_names:
+        continue
+    filtered.append(issue)
+
+def sort_key(issue):
+    label_names = [l["name"] for l in issue.get("labels", [])]
+    priority = UNPRIORITISED
+    for p, rank in PRIORITY_ORDER.items():
+        if p in label_names:
+            priority = rank
+            break
+    # created_at is ISO8601 — lexicographic sort is correct for oldest-first
+    return (priority, issue.get("created_at", ""))
+
+filtered.sort(key=sort_key)
+
+if not filtered:
+    print(f"No open issues found with label '{owner_label}'.")
+    sys.exit(0)
+
+if next_only:
+    # For --next, only return agent-approved issues (skip needs-refining)
+    for issue in filtered:
+        label_names = [l["name"] for l in issue.get("labels", [])]
+        if "agent-approved" in label_names:
+            print(f"#{issue['number']} {issue['title']}")
+            print(f"  {issue['html_url']}")
+            sys.exit(0)
+    print(f"No agent-approved non-blocked issues found with label '{owner_label}'.")
+    sys.exit(0)
+
+# Human-readable output grouped by repo, preserving priority-sorted order
+current_repo = None
+repo_issues = []
+
+def flush_repo(repo, issues):
+    if not issues:
+        return
+    count = len(issues)
+    print(f"=== {repo} ({count} issue{'s' if count != 1 else ''}) ===")
+    for issue in issues:
+        print(f"#{issue['number']} {issue['title']}")
+        print(f"  {issue['html_url']}")
+    print()
+
+for issue in filtered:
+    repo = issue["_repo"]
+    if repo != current_repo:
+        flush_repo(current_repo, repo_issues)
+        current_repo = repo
+        repo_issues = []
+    repo_issues.append(issue)
+
+flush_repo(current_repo, repo_issues)
+
+PYEOF
