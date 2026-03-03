@@ -20,25 +20,21 @@ The `gh-as-agent` script is a wrapper around `gh api` that handles token generat
 
 ### Usage
 
-When the request body contains text (e.g. issue bodies, comments), write the payload to a file first and pass it via `--input`. This avoids backticks in Markdown content being misinterpreted as shell command substitution, which would require manual approval in Claude Code.
-
 ```bash
-# Step 1: write the payload to a file (use the Write tool, not a shell command)
-# /tmp/gh-payload.json:
-# {"title": "Issue title", "body": "Issue body with `code` and **markdown**"}
-
-# Step 2: call gh-as-agent with --input (default: authenticates as lucos-agent)
+# Default: authenticates as lucos-agent
 ./gh-as-agent repos/lucas42/{repo}/issues \
     --method POST \
-    --input /tmp/gh-payload.json
+    -f title="Issue title" \
+    -f body="Issue body with \`code\` and **markdown**"
 
 # Authenticate as a specific app (use --app as the first argument)
 ./gh-as-agent --app lucos-issue-manager repos/lucas42/{repo}/issues \
     --method POST \
-    --input /tmp/gh-payload.json
+    -f title="Issue title" \
+    -f body="Issue body here"
 ```
 
-For requests with no body (e.g. label management), `-f` flags are fine as label names won't contain backticks:
+For label management and other simple requests, use `-f` flags in the same way:
 
 ```bash
 ./gh-as-agent repos/lucas42/{repo}/issues/{number}/labels \
