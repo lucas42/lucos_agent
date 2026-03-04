@@ -27,15 +27,15 @@
 # If no implementable issue is found, prints an informational message and
 # exits with code 0.
 #
-# Authentication: uses the default lucos-agent app credentials.
+# Authentication: uses lucos-issue-manager app credentials (read-only issue access).
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-TOKEN=$("$SCRIPT_DIR/get-token")
+TOKEN=$("$SCRIPT_DIR/get-token" --app lucos-issue-manager)
 
-# Wrapper: call GitHub API authenticated as lucos-agent
+# Wrapper: call GitHub API authenticated as lucos-issue-manager
 gh_api() {
     gh api -H "Authorization: token $TOKEN" "$@"
 }
