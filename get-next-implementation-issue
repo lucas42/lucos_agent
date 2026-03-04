@@ -1,0 +1,131 @@
+#!/bin/bash
+# Returns the single highest-priority agent-approved, non-blocked issue
+# across ALL repositories and ALL personas.
+#
+# Unlike get-issues-for-persona --implement (which is scoped to one persona),
+# this script searches globally and includes the owner label in its output
+# so the dispatcher can route the issue to the correct persona.
+#
+# Usage: get-next-implementation-issue
+#
+# Filtering:
+#   - Only issues with 'agent-approved' label
+#   - Excludes issues with 'status:blocked' label
+#   - Only issues with an 'owner:*' label
+#   - Excludes pull requests
+#
+# Sorting:
+#   - priority:high first, then priority:medium, then priority:low, then
+#     unprioritised issues last.
+#   - Within each priority band, oldest issues first.
+#
+# Output: If an issue is found, prints three lines:
+#   Line 1: owner label (e.g. "owner:lucos-developer")
+#   Line 2: issue title prefixed with number (e.g. "#42 Fix the thing")
+#   Line 3: issue URL (e.g. "https://github.com/lucas42/lucos_photos/issues/42")
+#
+# If no implementable issue is found, prints an informational message and
+# exits with code 0.
+#
+# Authentication: uses the default lucos-agent app credentials.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+TOKEN=$("$SCRIPT_DIR/get-token")
+
+# Wrapper: call GitHub API authenticated as lucos-agent
+gh_api() {
+    gh api -H "Authorization: token $TOKEN" "$@"
+}
+
+# Fetch all unarchived repos owned by lucas42.
+REPOS=$(gh_api --paginate /users/lucas42/repos --jq '.[] | select(.archived == false) | .full_name')
+
+# Collect all matching issues into a temp file as a JSON array for sorting.
+TMPFILE=$(mktemp)
+trap 'rm -f "$TMPFILE"' EXIT
+
+echo "[]" > "$TMPFILE"
+
+while IFS= read -r REPO; do
+    # Fetch open issues with agent-approved label.
+    # GitHub's issues API includes PRs; filter them out.
+    REPO_ISSUES=$(gh_api --paginate \
+        "/repos/${REPO}/issues?state=open&labels=agent-approved&per_page=100" \
+        --jq '[.[] | select(.pull_request == null)]' 2>/dev/null || echo "[]")
+
+    ISSUE_COUNT=$(echo "$REPO_ISSUES" | jq 'length')
+
+    if [[ "$ISSUE_COUNT" -eq 0 ]]; then
+        continue
+    fi
+
+    # Annotate each issue with its repo name, then append to the accumulated list
+    ANNOTATED=$(echo "$REPO_ISSUES" | jq --arg repo "$REPO" '[.[] | . + {_repo: $repo}]')
+    jq --argjson new "$ANNOTATED" '. + $new' "$TMPFILE" > "${TMPFILE}.new"
+    mv "${TMPFILE}.new" "$TMPFILE"
+
+done <<< "$REPOS"
+
+# Sort, filter, and output using Python
+_GET_ISSUES_TMPFILE="$TMPFILE" \
+python3 << 'PYEOF'
+import json
+import sys
+import os
+
+tmpfile = os.environ["_GET_ISSUES_TMPFILE"]
+
+with open(tmpfile) as f:
+    all_issues = json.load(f)
+
+PRIORITY_ORDER = {
+    "priority:high": 0,
+    "priority:medium": 1,
+    "priority:low": 2,
+}
+UNPRIORITISED = 3
+
+def get_label_names(issue):
+    return [l["name"] for l in issue.get("labels", [])]
+
+def get_owner_label(issue):
+    for name in get_label_names(issue):
+        if name.startswith("owner:"):
+            return name
+    return None
+
+def sort_key(issue):
+    label_names = get_label_names(issue)
+    priority = UNPRIORITISED
+    for p, rank in PRIORITY_ORDER.items():
+        if p in label_names:
+            priority = rank
+            break
+    return (priority, issue.get("created_at", ""))
+
+# Filter: must have an owner label, must not be blocked
+filtered = []
+for issue in all_issues:
+    label_names = get_label_names(issue)
+    if "status:blocked" in label_names:
+        continue
+    if get_owner_label(issue) is None:
+        continue
+    filtered.append(issue)
+
+filtered.sort(key=sort_key)
+
+if not filtered:
+    print("No implementable issues found across any repository.")
+    sys.exit(0)
+
+issue = filtered[0]
+owner = get_owner_label(issue)
+print(owner)
+print(f"#{issue['number']} {issue['title']}")
+print(issue["html_url"])
+
+PYEOF
