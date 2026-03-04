@@ -20,14 +20,10 @@ The `gh-as-agent` script is a wrapper around `gh api` that handles token generat
 
 ### Usage
 
-```bash
-# Default: authenticates as lucos-agent
-./gh-as-agent repos/lucas42/{repo}/issues \
-    --method POST \
-    -f title="Issue title" \
-    -f body="Issue body with \`code\` and **markdown**"
+`--app` is required — there is no default app. Every call must specify which persona is making the request.
 
-# Authenticate as a specific app (use --app as the first argument)
+```bash
+# --app must be the first argument
 ./gh-as-agent --app lucos-issue-manager repos/lucas42/{repo}/issues \
     --method POST \
     -f title="Issue title" \
@@ -37,7 +33,7 @@ The `gh-as-agent` script is a wrapper around `gh api` that handles token generat
 For label management and other simple requests, use `-f` flags in the same way:
 
 ```bash
-./gh-as-agent repos/lucas42/{repo}/issues/{number}/labels \
+./gh-as-agent --app lucos-system-administrator repos/lucas42/{repo}/issues/{number}/labels \
     --method POST \
     -f labels[]="agent-approved"
 ```

@@ -2,21 +2,22 @@
 # Wrapper around `gh api` that authenticates as a lucos GitHub App.
 # Handles token generation internally — no need to manage tokens manually.
 #
-# Usage: gh-as-agent [--app <app_name>] <gh api arguments>
-#   Persona names are defined in personas.json in the same directory as this script. app_name defaults to lucos-agent
-# e.g.:  gh-as-agent repos/lucas42/lucos/issues --method POST -f title="..." -f body="..."
+# Usage: gh-as-agent --app <app_name> <gh api arguments>
+#   --app is required. Persona names are defined in personas.json in the same directory as this script.
+# e.g.:  gh-as-agent --app lucos-system-administrator repos/lucas42/lucos/issues --method POST -f title="..." -f body="..."
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Parse --app flag (must be first argument if present)
+# Parse --app flag (must be first argument; required — no default)
 if [[ "${1:-}" == "--app" ]]; then
     APP_NAME="${2:?--app requires an argument}"
     shift 2
     TOKEN=$("$SCRIPT_DIR/get-token" --app "$APP_NAME")
 else
-    TOKEN=$("$SCRIPT_DIR/get-token")
+    "$SCRIPT_DIR/get-token"  # will print the error and exit 1
+    exit 1  # belt and braces
 fi
 
 gh api -H "Authorization: token $TOKEN" "$@"

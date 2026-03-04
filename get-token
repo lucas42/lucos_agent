@@ -12,11 +12,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/.env"
 PERSONAS_FILE="$SCRIPT_DIR/personas.json"
 
-# Parse --app flag
-APP_NAME="lucos-agent"
+# Parse --app flag — required, no default
 if [[ "${1:-}" == "--app" ]]; then
     APP_NAME="${2:?--app requires an argument}"
     shift 2
+else
+    echo "Error: --app <app_name> is required. No default app is configured." >&2
+    echo "If you're an AI agent, ensure you're running inside a persona context and using gh-as-agent with --app." >&2
+    echo "Valid app names are defined in personas.json." >&2
+    exit 1
 fi
 
 if [[ ! -f "$PERSONAS_FILE" ]]; then
