@@ -1,0 +1,146 @@
+#!/bin/bash
+# Returns open CodeQL (code-scanning) and secret-scanning alerts across all
+# unarchived repositories owned by lucas42.
+#
+# Output: a JSON object with two top-level keys:
+#   - code_scanning: array of CodeQL alert objects
+#   - secret_scanning: array of secret-scanning alert objects
+#
+# Each code_scanning entry includes:
+#   - repo: full repo name (e.g. "lucas42/lucos_example")
+#   - alert_number: the alert's numeric ID within that repo
+#   - rule_id: CodeQL rule identifier (e.g. "py/sql-injection")
+#   - rule_description: short human-readable rule name
+#   - severity: critical, high, medium, low, warning, note, or error
+#   - description: one-line description of the finding
+#   - location: file path and line range of the finding
+#   - html_url: link to the alert on GitHub
+#
+# Each secret_scanning entry includes:
+#   - repo: full repo name
+#   - alert_number: the alert's numeric ID within that repo
+#   - secret_type: type identifier (e.g. "github_personal_access_token")
+#   - secret_type_display_name: human-readable name for the secret type
+#   - validity: "active", "inactive", or "unknown"
+#   - html_url: link to the alert on GitHub
+#
+# Repos where the relevant feature is disabled are silently skipped.
+# Repos where the app lacks access are silently skipped.
+#
+# Authentication: uses the lucos-security GitHub App via get-token.
+#
+# Output: JSON object (code_scanning and secret_scanning arrays may be empty).
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOKEN=$("$SCRIPT_DIR/get-token" --app "lucos-security")
+
+# Wrapper: call GitHub API authenticated as lucos-security.
+gh_api() {
+    gh api -H "Authorization: token $TOKEN" "$@"
+}
+
+# Fetch all unarchived repos owned by lucas42.
+REPOS=$(gh_api --paginate /users/lucas42/repos --jq '.[] | select(.archived == false) | .full_name')
+
+code_scanning_json="[]"
+secret_scanning_json="[]"
+
+while IFS= read -r REPO; do
+
+    # --- Code scanning (CodeQL) alerts ---
+    # 403 = feature disabled or no access; silently skip.
+    REPO_CODE_ALERTS_RAW=$(gh_api --paginate \
+        "/repos/${REPO}/code-scanning/alerts?state=open&per_page=100" \
+        2>/dev/null) || REPO_CODE_ALERTS_RAW=""
+
+    if [[ -n "$REPO_CODE_ALERTS_RAW" ]]; then
+        REPO_CODE_ALERTS=$(echo "$REPO_CODE_ALERTS_RAW" | jq -s 'add // []')
+        CODE_COUNT=$(echo "$REPO_CODE_ALERTS" | jq 'length')
+
+        if [[ "$CODE_COUNT" -gt 0 ]]; then
+            while IFS= read -r ALERT; do
+                ALERT_NUMBER=$(echo "$ALERT" | jq -r '.number')
+                RULE_ID=$(echo "$ALERT" | jq -r '.rule.id // ""')
+                RULE_DESC=$(echo "$ALERT" | jq -r '.rule.description // ""')
+                SEVERITY=$(echo "$ALERT" | jq -r '.rule.severity // .rule.security_severity_level // ""')
+                DESCRIPTION=$(echo "$ALERT" | jq -r '.most_recent_instance.message.text // ""')
+                LOCATION=$(echo "$ALERT" | jq -r '
+                    (.most_recent_instance.location |
+                        "\(.path):\(.start_line)-\(.end_line)")
+                    // ""')
+                ALERT_URL=$(echo "$ALERT" | jq -r '.html_url')
+
+                ALERT_ENTRY=$(jq -n \
+                    --arg repo "$REPO" \
+                    --argjson alert_number "$ALERT_NUMBER" \
+                    --arg rule_id "$RULE_ID" \
+                    --arg rule_description "$RULE_DESC" \
+                    --arg severity "$SEVERITY" \
+                    --arg description "$DESCRIPTION" \
+                    --arg location "$LOCATION" \
+                    --arg html_url "$ALERT_URL" \
+                    '{
+                        repo: $repo,
+                        alert_number: $alert_number,
+                        rule_id: $rule_id,
+                        rule_description: $rule_description,
+                        severity: $severity,
+                        description: $description,
+                        location: $location,
+                        html_url: $html_url
+                    }')
+
+                code_scanning_json=$(echo "$code_scanning_json" | jq --argjson entry "$ALERT_ENTRY" '. + [$entry]')
+
+            done < <(echo "$REPO_CODE_ALERTS" | jq -c '.[]' 2>/dev/null || true)
+        fi
+    fi
+
+    # --- Secret scanning alerts ---
+    # 403 = feature disabled or no access; silently skip.
+    REPO_SECRET_ALERTS_RAW=$(gh_api --paginate \
+        "/repos/${REPO}/secret-scanning/alerts?state=open&per_page=100" \
+        2>/dev/null) || REPO_SECRET_ALERTS_RAW=""
+
+    if [[ -n "$REPO_SECRET_ALERTS_RAW" ]]; then
+        REPO_SECRET_ALERTS=$(echo "$REPO_SECRET_ALERTS_RAW" | jq -s 'add // []')
+        SECRET_COUNT=$(echo "$REPO_SECRET_ALERTS" | jq 'length')
+
+        if [[ "$SECRET_COUNT" -gt 0 ]]; then
+            while IFS= read -r ALERT; do
+                ALERT_NUMBER=$(echo "$ALERT" | jq -r '.number')
+                SECRET_TYPE=$(echo "$ALERT" | jq -r '.secret_type // ""')
+                SECRET_TYPE_DISPLAY=$(echo "$ALERT" | jq -r '.secret_type_display_name // ""')
+                VALIDITY=$(echo "$ALERT" | jq -r '.validity // "unknown"')
+                ALERT_URL=$(echo "$ALERT" | jq -r '.html_url')
+
+                ALERT_ENTRY=$(jq -n \
+                    --arg repo "$REPO" \
+                    --argjson alert_number "$ALERT_NUMBER" \
+                    --arg secret_type "$SECRET_TYPE" \
+                    --arg secret_type_display_name "$SECRET_TYPE_DISPLAY" \
+                    --arg validity "$VALIDITY" \
+                    --arg html_url "$ALERT_URL" \
+                    '{
+                        repo: $repo,
+                        alert_number: $alert_number,
+                        secret_type: $secret_type,
+                        secret_type_display_name: $secret_type_display_name,
+                        validity: $validity,
+                        html_url: $html_url
+                    }')
+
+                secret_scanning_json=$(echo "$secret_scanning_json" | jq --argjson entry "$ALERT_ENTRY" '. + [$entry]')
+
+            done < <(echo "$REPO_SECRET_ALERTS" | jq -c '.[]' 2>/dev/null || true)
+        fi
+    fi
+
+done <<< "$REPOS"
+
+jq -n \
+    --argjson code_scanning "$code_scanning_json" \
+    --argjson secret_scanning "$secret_scanning_json" \
+    '{code_scanning: $code_scanning, secret_scanning: $secret_scanning}'
