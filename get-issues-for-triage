@@ -6,6 +6,9 @@
 #   2. Issues labelled 'needs-refining' where the most recent comment is NOT
 #      from lucos-issue-manager[bot] — an owner agent has probably completed
 #      work and the issue needs a label transition.
+#   2b. Issues labelled 'needs-refining' where the most recent comment IS from
+#       lucos-issue-manager[bot] but has reactions from a non-bot user — e.g.
+#       a +1 on a proposal counts as new activity that needs re-triage.
 #   3. Issues explicitly labelled 'owner:lucos-issue-manager' — the issue has
 #      been routed directly back to the issue manager.
 #
@@ -74,10 +77,30 @@ while IFS= read -r REPO; do
                     # No comments yet — include for initial triage
                     INCLUDE="true"
                 else
-                    LAST_COMMENTER=$(echo "$COMMENTS" | jq -r '.[-1].user.login')
+                    LAST_COMMENT=$(echo "$COMMENTS" | jq '.[-1]')
+                    LAST_COMMENTER=$(echo "$LAST_COMMENT" | jq -r '.user.login')
                     if [[ "$LAST_COMMENTER" != "lucos-issue-manager[bot]" ]]; then
                         # Someone else acted last — needs a triage pass
                         INCLUDE="true"
+                    else
+                        # Last comment is ours — check if any comment in the
+                        # thread has reactions from a non-bot user (e.g. a +1
+                        # on a proposal from another agent).
+                        TOTAL_REACTIONS=$(echo "$COMMENTS" | jq '[.[].reactions.total_count] | add')
+                        if [[ "$TOTAL_REACTIONS" -gt 0 ]]; then
+                            # At least one comment has reactions — fetch details
+                            # for comments that have them and check for non-bot reactors.
+                            REACTED_IDS=$(echo "$COMMENTS" | jq -r '.[] | select(.reactions.total_count > 0) | .id')
+                            while IFS= read -r CID; do
+                                REACTORS=$(gh_api \
+                                    "/repos/${REPO}/issues/comments/${CID}/reactions" \
+                                    --jq '[.[].user.login | select(endswith("[bot]") | not)]' 2>/dev/null || echo "[]")
+                                if [[ $(echo "$REACTORS" | jq 'length') -gt 0 ]]; then
+                                    INCLUDE="true"
+                                    break
+                                fi
+                            done <<< "$REACTED_IDS"
+                        fi
                     fi
                 fi
             fi
