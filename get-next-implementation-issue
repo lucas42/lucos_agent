@@ -15,8 +15,8 @@
 #   - Excludes pull requests
 #
 # Sorting:
-#   - priority:high first, then priority:medium, then priority:low, then
-#     unprioritised issues last.
+#   - priority:critical first, then priority:high, then priority:medium,
+#     then priority:low, then unprioritised issues last.
 #   - Within each priority band, oldest issues first.
 #
 # Output: If an issue is found, prints three lines:
@@ -82,11 +82,12 @@ with open(tmpfile) as f:
     all_issues = json.load(f)
 
 PRIORITY_ORDER = {
-    "priority:high": 0,
-    "priority:medium": 1,
-    "priority:low": 2,
+    "priority:critical": 0,
+    "priority:high": 1,
+    "priority:medium": 2,
+    "priority:low": 3,
 }
-UNPRIORITISED = 3
+UNPRIORITISED = 4
 
 def get_label_names(issue):
     return [l["name"] for l in issue.get("labels", [])]
