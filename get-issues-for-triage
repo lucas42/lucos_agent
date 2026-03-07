@@ -2,7 +2,10 @@
 # Returns a JSON list of GitHub issues that need triage attention from lucos-issue-manager.
 #
 # Inclusion criteria (any one is sufficient):
-#   1. Unlabelled issues — have never been reviewed; need initial triage.
+#   1. Issues with no workflow labels — have never been triaged; need initial
+#      triage. Workflow labels are: needs-refining, agent-approved, owner:*,
+#      priority:*, status:*. Non-workflow labels like 'bug', 'enhancement',
+#      'audit-finding' etc. do not count as triaged.
 #   2. Issues labelled 'needs-refining' where the most recent comment is NOT
 #      from lucos-issue-manager[bot] — an owner agent has probably completed
 #      work and the issue needs a label transition.
@@ -59,8 +62,17 @@ while IFS= read -r REPO; do
 
         INCLUDE="false"
 
-        # Criterion 1: Unlabelled issues need initial triage
-        if [[ "$LABEL_COUNT" -eq 0 ]]; then
+        # Criterion 1: Issues with no workflow labels need initial triage.
+        # Workflow labels are: needs-refining, agent-approved, owner:*, priority:*, status:*
+        # Non-workflow labels (bug, enhancement, audit-finding, etc.) don't count.
+        WORKFLOW_LABEL_COUNT=$(echo "$LABELS" | jq '[.[] | select(
+            . == "needs-refining" or
+            . == "agent-approved" or
+            startswith("owner:") or
+            startswith("priority:") or
+            startswith("status:")
+        )] | length')
+        if [[ "$WORKFLOW_LABEL_COUNT" -eq 0 ]]; then
             INCLUDE="true"
         fi
 
