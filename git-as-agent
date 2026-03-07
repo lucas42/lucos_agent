@@ -1,0 +1,40 @@
+#!/bin/bash
+# Wrapper around `git` that sets the correct committer identity for a lucos GitHub App persona.
+# Ensures all commit-writing operations (commit, cherry-pick, commit --amend, etc.) are attributed
+# to the correct bot identity without having to remember the -c flags every time.
+#
+# Usage: git-as-agent --app <app_name> <git arguments>
+#   --app is required. Persona names are defined in personas.json in the same directory as this script.
+# e.g.:  git-as-agent --app lucos-system-administrator commit -m "Fix something"
+#        git-as-agent --app lucos-site-reliability cherry-pick abc123
+#        git-as-agent --app lucos-developer commit --amend
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PERSONAS_FILE="$SCRIPT_DIR/personas.json"
+
+# Parse --app flag (must be first argument; required — no default)
+if [[ "${1:-}" != "--app" ]]; then
+    echo "Error: --app <persona-name> is required as the first argument" >&2
+    echo "Usage: git-as-agent --app <persona-name> <git arguments>" >&2
+    echo "Persona names: $(jq -r 'keys | join(", ")' "$PERSONAS_FILE")" >&2
+    exit 1
+fi
+
+APP_NAME="${2:?--app requires an argument}"
+shift 2
+
+# Look up persona identity from personas.json
+BOT_NAME=$(jq -r --arg app "$APP_NAME" '.[$app].bot_name // empty' "$PERSONAS_FILE")
+BOT_USER_ID=$(jq -r --arg app "$APP_NAME" '.[$app].bot_user_id // empty' "$PERSONAS_FILE")
+
+if [[ -z "$BOT_NAME" || -z "$BOT_USER_ID" ]]; then
+    echo "Error: unknown persona '$APP_NAME'" >&2
+    echo "Known personas: $(jq -r 'keys | join(", ")' "$PERSONAS_FILE")" >&2
+    exit 1
+fi
+
+BOT_EMAIL="${BOT_USER_ID}+${BOT_NAME}@users.noreply.github.com"
+
+git -c "user.name=${BOT_NAME}" -c "user.email=${BOT_EMAIL}" "$@"

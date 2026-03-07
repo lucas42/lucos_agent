@@ -4,7 +4,7 @@ This repo provides tooling for AI agents to interact with GitHub on the lucos in
 
 ## GitHub App details
 
-App names are the GitHub-normalised slugs (lowercase, spaces replaced with hyphens). Pass these to `--app` in `get-token` and `gh-as-agent`.
+App names are the GitHub-normalised slugs (lowercase, spaces replaced with hyphens). Pass these to `--app` in `get-token`, `gh-as-agent`, and `git-as-agent`.
 
 **Canonical identity data** for all personas (App ID, Installation ID, bot user ID, bot name, display name, PEM variable) is stored in [`personas.json`](personas.json) in this repo. This is the single source of truth — do not duplicate these values elsewhere.
 
@@ -39,6 +39,27 @@ For label management and other simple requests, use `-f` flags in the same way:
 ```
 
 All `gh api` flags and arguments are passed through directly. There is no need to generate or manage tokens manually.
+
+---
+
+## git-as-agent
+
+The `git-as-agent` script is a wrapper around `git` that sets the correct committer identity for a lucos GitHub App persona. **This is the required way to make git commits as a lucos bot** — it ensures every commit-writing operation is correctly attributed without having to remember identity flags.
+
+### Usage
+
+`--app` is required — there is no default app. Every call must specify which persona is making the commit.
+
+```bash
+# --app must be the first argument
+./git-as-agent --app lucos-system-administrator commit -m "Fix something"
+./git-as-agent --app lucos-site-reliability cherry-pick abc123
+./git-as-agent --app lucos-developer commit --amend
+```
+
+The script looks up `bot_name` and `bot_user_id` from `personas.json` and prepends `-c user.name=... -c user.email=...` to the git invocation. All remaining arguments are passed through to `git`.
+
+**Never** use `git config user.name` or `git config user.email` — that would affect all future commits in the environment, not just the one you're making.
 
 ---
 
