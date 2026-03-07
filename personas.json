@@ -70,5 +70,13 @@
     "app_id": "2998021",
     "installation_id": "113759059",
     "pem_var": "LUCOS_INTERN_PEM"
+  },
+  "lucos-ux": {
+    "display_name": "lucOS UX",
+    "bot_name": "lucos-ux[bot]",
+    "bot_user_id": "266323968",
+    "app_id": "3032773",
+    "installation_id": "114692216",
+    "pem_var": "LUCOS_UX_PEM"
   }
 }
