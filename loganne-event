@@ -1,0 +1,28 @@
+#!/bin/bash
+# Send an event to Loganne.
+# Source is hardcoded to "lucos_agent".
+# No auth required for writes.
+#
+# Usage: loganne-event <type> <humanReadable>
+#   type          - Event type (e.g. plannedMaintenance, hostRebooted)
+#   humanReadable - Plain English description of the event
+
+set -euo pipefail
+
+if [[ $# -lt 2 ]]; then
+    echo "Usage: $(basename "$0") <type> <humanReadable>" >&2
+    exit 1
+fi
+
+TYPE="$1"
+HUMAN_READABLE="$2"
+
+curl -s -f \
+    -X POST \
+    -H "Content-Type: application/json" \
+    -d "$(jq -n \
+        --arg source "lucos_agent" \
+        --arg type "$TYPE" \
+        --arg humanReadable "$HUMAN_READABLE" \
+        '{source: $source, type: $type, humanReadable: $humanReadable}')" \
+    "https://loganne.l42.eu/events"
