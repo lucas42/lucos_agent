@@ -1,23 +1,19 @@
 #!/bin/bash
-# Returns the single highest-priority agent-approved, non-blocked issue
-# across ALL repositories and ALL personas.
+# Returns the next implementable issue from the implementation queue.
 #
-# Unlike get-issues-for-persona --implement (which is scoped to one persona),
-# this script searches globally and includes the owner label in its output
-# so the dispatcher can route the issue to the correct persona.
+# The queue is defined in docs/implementation-queue.txt in the lucos repo
+# (at ~/sandboxes/lucos/docs/implementation-queue.txt). Issues are listed
+# top-to-bottom; the first valid issue is returned.
 #
-# Usage: get-next-implementation-issue
+# An issue is valid if it is:
+#   - listed in the queue file
+#   - open on GitHub
+#   - labelled 'agent-approved'
+#   - NOT labelled 'status:blocked'
+#   - has an 'owner:*' label
+#   - is not a pull request
 #
-# Filtering:
-#   - Only issues with 'agent-approved' label
-#   - Excludes issues with 'status:blocked' label
-#   - Only issues with an 'owner:*' label
-#   - Excludes pull requests
-#
-# Sorting:
-#   - priority:critical first, then priority:high, then priority:medium,
-#     then priority:low, then unprioritised issues last.
-#   - Within each priority band, oldest issues first.
+# Malformed lines (not matching the GitHub issue URL pattern) are silently skipped.
 #
 # Output: If an issue is found, prints three lines:
 #   Line 1: owner label (e.g. "owner:lucos-developer")
@@ -32,6 +28,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+QUEUE_FILE="$HOME/sandboxes/lucos/docs/implementation-queue.txt"
 
 TOKEN=$("$SCRIPT_DIR/get-token" --app lucos-issue-manager)
 
@@ -40,93 +37,79 @@ gh_api() {
     gh api -H "Authorization: token $TOKEN" "$@"
 }
 
-# Fetch all unarchived repos owned by lucas42.
-REPOS=$(gh_api --paginate /users/lucas42/repos --jq '.[] | select(.archived == false) | .full_name')
+if [[ ! -f "$QUEUE_FILE" ]]; then
+    echo "Queue file not found: $QUEUE_FILE"
+    exit 1
+fi
 
-# Collect all matching issues into a temp file as a JSON array for sorting.
-TMPFILE=$(mktemp)
-trap 'rm -f "$TMPFILE"' EXIT
+# Read the queue file, skip blank lines and comments, yield issue URLs
+while IFS= read -r line; do
+    # Trim leading/trailing whitespace
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
 
-echo "[]" > "$TMPFILE"
+    # Skip blank lines and comments
+    [[ -z "$line" ]] && continue
+    [[ "$line" == \#* ]] && continue
 
-while IFS= read -r REPO; do
-    # Fetch open issues with agent-approved label.
-    # GitHub's issues API includes PRs; filter them out.
-    REPO_ISSUES=$(gh_api --paginate \
-        "/repos/${REPO}/issues?state=open&labels=agent-approved&per_page=100" \
-        --jq '[.[] | select(.pull_request == null)]' 2>/dev/null || echo "[]")
-
-    ISSUE_COUNT=$(echo "$REPO_ISSUES" | jq 'length')
-
-    if [[ "$ISSUE_COUNT" -eq 0 ]]; then
+    # Validate it looks like a GitHub issue URL (basic check)
+    if ! [[ "$line" =~ ^https://github\.com/[^/]+/[^/]+/issues/[0-9]+$ ]]; then
+        # Malformed line — skip silently
         continue
     fi
 
-    # Annotate each issue with its repo name, then append to the accumulated list
-    ANNOTATED=$(echo "$REPO_ISSUES" | jq --arg repo "$REPO" '[.[] | . + {_repo: $repo}]')
-    jq --argjson new "$ANNOTATED" '. + $new' "$TMPFILE" > "${TMPFILE}.new"
-    mv "${TMPFILE}.new" "$TMPFILE"
+    # Extract owner/repo/number from URL
+    # e.g. https://github.com/lucas42/lucos_photos/issues/42
+    #        -> owner=lucas42, repo=lucos_photos, number=42
+    REPO_PATH=$(echo "$line" | sed 's|https://github\.com/||' | sed 's|/issues/.*||')
+    NUMBER=$(echo "$line" | sed 's|.*/issues/||')
 
-done <<< "$REPOS"
+    # Fetch issue details
+    ISSUE=$(gh_api "/repos/${REPO_PATH}/issues/${NUMBER}" 2>/dev/null || true)
 
-# Sort, filter, and output using Python
-_GET_ISSUES_TMPFILE="$TMPFILE" \
-python3 << 'PYEOF'
-import json
-import sys
-import os
-
-tmpfile = os.environ["_GET_ISSUES_TMPFILE"]
-
-with open(tmpfile) as f:
-    all_issues = json.load(f)
-
-PRIORITY_ORDER = {
-    "priority:critical": 0,
-    "priority:high": 1,
-    "priority:medium": 2,
-    "priority:low": 3,
-}
-UNPRIORITISED = 4
-
-def get_label_names(issue):
-    return [l["name"] for l in issue.get("labels", [])]
-
-def get_owner_label(issue):
-    for name in get_label_names(issue):
-        if name.startswith("owner:"):
-            return name
-    return None
-
-def sort_key(issue):
-    label_names = get_label_names(issue)
-    priority = UNPRIORITISED
-    for p, rank in PRIORITY_ORDER.items():
-        if p in label_names:
-            priority = rank
-            break
-    return (priority, issue.get("created_at", ""))
-
-# Filter: must have an owner label, must not be blocked
-filtered = []
-for issue in all_issues:
-    label_names = get_label_names(issue)
-    if "status:blocked" in label_names:
+    if [[ -z "$ISSUE" ]]; then
         continue
-    if get_owner_label(issue) is None:
-        continue
-    filtered.append(issue)
+    fi
 
-filtered.sort(key=sort_key)
+    # Parse with Python: check all conditions and extract fields
+    RESULT=$(echo "$ISSUE" | python3 -c "
+import json, sys
 
-if not filtered:
-    print("No implementable issues found across any repository.")
-    sys.exit(0)
+issue = json.load(sys.stdin)
 
-issue = filtered[0]
-owner = get_owner_label(issue)
+# Must be open
+if issue.get('state') != 'open':
+    sys.exit(1)
+
+# Must not be a pull request
+if issue.get('pull_request') is not None:
+    sys.exit(1)
+
+label_names = [l['name'] for l in issue.get('labels', [])]
+
+# Must have agent-approved
+if 'agent-approved' not in label_names:
+    sys.exit(1)
+
+# Must not be blocked
+if 'status:blocked' in label_names:
+    sys.exit(1)
+
+# Must have an owner label
+owner = next((l for l in label_names if l.startswith('owner:')), None)
+if owner is None:
+    sys.exit(1)
+
 print(owner)
-print(f"#{issue['number']} {issue['title']}")
-print(issue["html_url"])
+print(f\"#{issue['number']} {issue['title']}\")
+print(issue['html_url'])
+" 2>/dev/null) || true
 
-PYEOF
+    if [[ -n "$RESULT" ]]; then
+        echo "$RESULT"
+        exit 0
+    fi
+
+done < "$QUEUE_FILE"
+
+echo "No implementable issues found in the queue."
