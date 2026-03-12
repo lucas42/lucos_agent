@@ -13,8 +13,8 @@
 #   - Only Issue content (not pull requests or draft issues)
 #
 # Sorting:
-#   - Priority field: Critical → High → Medium → Low → unprioritised last
-#   - Within each priority band, oldest issues first (by createdAt)
+#   - Board position order (manual drag order on the project board)
+#   - This takes full precedence — priority labels are not used for sorting
 #
 # Output: If an issue is found, prints three lines:
 #   Line 1: owner label (e.g. "owner:lucos-developer")
@@ -39,14 +39,13 @@ trap 'rm -f "$TMPFILE"' EXIT
 {
   node(id: "PVT_kwHOAAaLL84BRh5d") {
     ... on ProjectV2 {
-      items(first: 100) {
+      items(first: 100, orderBy: {field: POSITION, direction: ASC}) {
         nodes {
           content {
             ... on Issue {
               number
               title
               url
-              createdAt
             }
           }
           fieldValues(first: 10) {
@@ -72,14 +71,6 @@ with open(os.environ["_TMPFILE"]) as f:
     data = json.load(f)
 nodes = data["data"]["node"]["items"]["nodes"]
 
-PRIORITY_ORDER = {
-    "Critical": 0,
-    "High":     1,
-    "Medium":   2,
-    "Low":      3,
-}
-UNPRIORITISED = 4
-
 def get_field_values(node):
     """Return a dict of field name -> option name for single-select fields."""
     result = {}
@@ -88,6 +79,8 @@ def get_field_values(node):
             result[fv["field"]["name"]] = fv["name"]
     return result
 
+# Items are returned in board position order (ASC) by the API query.
+# We preserve that order — the first matching item is the highest priority.
 ready_issues = []
 for node in nodes:
     content = node.get("content")
@@ -104,18 +97,12 @@ for node in nodes:
     if not owner_name:
         continue
 
-    priority = PRIORITY_ORDER.get(fields.get("Priority", ""), UNPRIORITISED)
-
     ready_issues.append({
         "number":     content["number"],
         "title":      content["title"],
         "url":        content["url"],
-        "created_at": content.get("createdAt", ""),
         "owner":      owner_name,
-        "priority":   priority,
     })
-
-ready_issues.sort(key=lambda i: (i["priority"], i["created_at"]))
 
 if not ready_issues:
     print("No implementable issues found in the Ready column.")
