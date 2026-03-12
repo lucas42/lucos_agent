@@ -42,6 +42,32 @@ All `gh api` flags and arguments are passed through directly. There is no need t
 
 ---
 
+## gh-projects
+
+The `gh-projects` script is a wrapper around `gh api` that authenticates using a personal access token (PAT) with GitHub Projects permissions.
+
+**IMPORTANT: This script is for GitHub Projects (v2 user projects) ONLY.** GitHub Apps cannot access v2 user projects — that is the sole reason this PAT exists. For all other GitHub API calls (issues, PRs, comments, labels, etc.), use `gh-as-agent` instead.
+
+### Usage
+
+No `--app` flag — there is only one PAT, not per-persona.
+
+```bash
+# Query projects via GraphQL
+./gh-projects graphql -f query='{ viewer { projectsV2(first: 10) { nodes { id title } } } }'
+
+# Add an item to a project
+./gh-projects graphql -f query='mutation { addProjectV2ItemById(input: { projectId: "PVT_..." contentId: "..." }) { item { id } } }'
+```
+
+The PAT is read from `GITHUB_PROJECTS_PAT` in the `.env` file in the same directory as the script. Pull it with:
+
+```bash
+scp -P 2202 "creds.l42.eu:lucos_agent/development/.env" .
+```
+
+---
+
 ## git-as-agent
 
 The `git-as-agent` script is a wrapper around `git` that sets the correct committer identity for a lucos GitHub App persona. **This is the required way to make git commits as a lucos bot** — it ensures every commit-writing operation is correctly attributed without having to remember identity flags.

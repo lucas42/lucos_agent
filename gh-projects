@@ -1,0 +1,34 @@
+#!/bin/bash
+# Wrapper around `gh api` that authenticates using the GITHUB_PROJECTS_PAT
+# personal access token for GitHub v2 user projects API calls.
+#
+# IMPORTANT: This script is ONLY for GitHub Projects (v2 user projects).
+# GitHub Apps cannot access v2 user projects, so a PAT is required.
+# For ALL other GitHub API calls, use gh-as-agent instead.
+#
+# Usage: gh-projects <gh api arguments>
+#   e.g.: gh-projects graphql -f query='{ viewer { projectsV2(first: 10) { nodes { id title } } } }'
+#
+# The PAT is read from GITHUB_PROJECTS_PAT in the .env file in the same
+# directory as this script (pulled from lucos_creds).
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="$SCRIPT_DIR/.env"
+
+if [ ! -f "$ENV_FILE" ]; then
+    echo "gh-projects: .env file not found at $ENV_FILE" >&2
+    echo "Pull it with: scp -P 2202 creds.l42.eu:lucos_agent/development/.env $SCRIPT_DIR/" >&2
+    exit 1
+fi
+
+# Source only the GITHUB_PROJECTS_PAT variable from .env
+GITHUB_PROJECTS_PAT=$(grep '^GITHUB_PROJECTS_PAT=' "$ENV_FILE" | head -1 | sed 's/^GITHUB_PROJECTS_PAT=//; s/^"//; s/"$//')
+
+if [ -z "$GITHUB_PROJECTS_PAT" ]; then
+    echo "gh-projects: GITHUB_PROJECTS_PAT not found in $ENV_FILE" >&2
+    exit 1
+fi
+
+gh api -H "Authorization: token $GITHUB_PROJECTS_PAT" "$@"
