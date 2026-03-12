@@ -14,6 +14,9 @@
 #       a +1 on a proposal counts as new activity that needs re-triage.
 #   3. Issues explicitly labelled 'owner:lucos-issue-manager' — the issue has
 #      been routed directly back to the issue manager.
+#   4. Issues with some workflow labels (owner:*, priority:*, or status:*) but
+#      missing BOTH 'needs-refining' and 'agent-approved' — inconsistent label
+#      state, probably left in limbo by a manual label adjustment.
 #
 # Exclusion criteria:
 #   - Issues labelled 'agent-approved' (already done).
@@ -126,6 +129,22 @@ while IFS= read -r REPO; do
             fi
         fi
 
+        # Criterion 4: Has some workflow labels but is missing both 'needs-refining'
+        # and 'agent-approved' — inconsistent state left by a manual label adjustment.
+        # (Criterion 1 already catches issues with NO workflow labels; this catches
+        # issues that have some but are in an ambiguous in-between state.)
+        if [[ "$INCLUDE" == "false" ]]; then
+            HAS_OWNER_OR_PRIORITY_OR_STATUS=$(echo "$LABELS" | jq -r '[.[] | select(
+                startswith("owner:") or
+                startswith("priority:") or
+                startswith("status:")
+            )] | length > 0')
+            HAS_NEEDS_REFINING=$(echo "$LABELS" | jq -r 'map(select(. == "needs-refining")) | length > 0')
+            if [[ "$HAS_OWNER_OR_PRIORITY_OR_STATUS" == "true" && "$HAS_NEEDS_REFINING" == "false" ]]; then
+                INCLUDE="true"
+            fi
+        fi
+
         if [[ "$INCLUDE" == "false" ]]; then
             continue
         fi
@@ -149,14 +168,18 @@ done <<< "$REPOS"
 # (Status option ID: d5369b39)
 # These may not yet have workflow labels, so the label-based logic above may
 # not have caught them. We merge and deduplicate by URL.
-BOARD_TMPFILE=$(mktemp)
-trap 'rm -f "$BOARD_TMPFILE"' EXIT
+# The board may have 200+ items, so we paginate until hasNextPage is false.
+BOARD_ISSUES=$(GH_PROJECTS="$SCRIPT_DIR/gh-projects" python3 << 'PYEOF'
+import json, os, subprocess, sys
 
-"$SCRIPT_DIR/gh-projects" graphql -f query='
+gh_projects = os.environ["GH_PROJECTS"]
+
+QUERY_TEMPLATE = """
 {
   node(id: "PVT_kwHOAAaLL84BRh5d") {
     ... on ProjectV2 {
-      items(first: 100) {
+      items(first: 100%s) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           content {
             ... on Issue {
@@ -179,16 +202,28 @@ trap 'rm -f "$BOARD_TMPFILE"' EXIT
       }
     }
   }
-}' > "$BOARD_TMPFILE"
+}
+"""
 
-BOARD_ISSUES=$(BOARD_TMPFILE="$BOARD_TMPFILE" python3 << 'PYEOF'
-import json, os
+all_nodes = []
+cursor = None
 
-with open(os.environ["BOARD_TMPFILE"]) as f:
-    data = json.load(f)
+while True:
+    after_arg = f', after: "{cursor}"' if cursor else ""
+    query = QUERY_TEMPLATE % after_arg
+    result = subprocess.run(
+        [gh_projects, "graphql", "-f", f"query={query}"],
+        capture_output=True, text=True, check=True
+    )
+    data = json.loads(result.stdout)
+    items = data["data"]["node"]["items"]
+    all_nodes.extend(items["nodes"])
+    if not items["pageInfo"]["hasNextPage"]:
+        break
+    cursor = items["pageInfo"]["endCursor"]
 
 results = []
-for node in data["data"]["node"]["items"]["nodes"]:
+for node in all_nodes:
     content = node.get("content")
     if not content or "url" not in content:
         continue
