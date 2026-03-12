@@ -145,4 +145,79 @@ while IFS= read -r REPO; do
 
 done <<< "$REPOS"
 
+# Also include issues in the "Needs Triage" column of the project board.
+# (Status option ID: d5369b39)
+# These may not yet have workflow labels, so the label-based logic above may
+# not have caught them. We merge and deduplicate by URL.
+BOARD_TMPFILE=$(mktemp)
+trap 'rm -f "$BOARD_TMPFILE"' EXIT
+
+"$SCRIPT_DIR/gh-projects" graphql -f query='
+{
+  node(id: "PVT_kwHOAAaLL84BRh5d") {
+    ... on ProjectV2 {
+      items(first: 100) {
+        nodes {
+          content {
+            ... on Issue {
+              number
+              title
+              url
+              repository { nameWithOwner }
+              labels(first: 20) { nodes { name } }
+            }
+          }
+          fieldValues(first: 10) {
+            nodes {
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+                field { ... on ProjectV2SingleSelectField { name } }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}' > "$BOARD_TMPFILE"
+
+BOARD_ISSUES=$(BOARD_TMPFILE="$BOARD_TMPFILE" python3 << 'PYEOF'
+import json, os
+
+with open(os.environ["BOARD_TMPFILE"]) as f:
+    data = json.load(f)
+
+results = []
+for node in data["data"]["node"]["items"]["nodes"]:
+    content = node.get("content")
+    if not content or "url" not in content:
+        continue
+    fields = {
+        fv["field"]["name"]: fv["name"]
+        for fv in node.get("fieldValues", {}).get("nodes", [])
+        if fv and "field" in fv
+    }
+    if fields.get("Status") != "Needs Triage":
+        continue
+    labels = [l["name"] for l in content.get("labels", {}).get("nodes", [])]
+    results.append({
+        "repo":   content["repository"]["nameWithOwner"],
+        "number": content["number"],
+        "title":  content["title"],
+        "url":    content["url"],
+        "labels": labels,
+    })
+
+print(json.dumps(results))
+PYEOF
+)
+
+# Merge board issues into issues_json, deduplicating by URL
+issues_json=$(echo "$issues_json" | jq \
+    --argjson board "$BOARD_ISSUES" \
+    'reduce $board[] as $item (
+        .;
+        if any(.[]; .url == $item.url) then . else . + [$item] end
+    )')
+
 echo "$issues_json"
