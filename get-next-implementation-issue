@@ -1,23 +1,20 @@
 #!/bin/bash
-# Returns the single highest-priority agent-approved, non-blocked issue
-# across ALL repositories and ALL personas.
+# Returns the single highest-priority issue in the "Ready" column of the
+# "lucOS Issue Prioritisation" GitHub v2 project board.
 #
-# Unlike get-issues-for-persona --implement (which is scoped to one persona),
-# this script searches globally and includes the owner label in its output
-# so the dispatcher can route the issue to the correct persona.
+# Unlike the old label-scanning approach, this reads directly from the
+# project board, which is the canonical source of truth for prioritisation.
 #
 # Usage: get-next-implementation-issue
 #
 # Filtering:
-#   - Only issues with 'agent-approved' label
-#   - Excludes issues with 'status:blocked' label
-#   - Only issues with an 'owner:*' label
-#   - Excludes pull requests
+#   - Only items with Status = "Ready" (option ID: bfb298e3)
+#   - Only items with an Owner field set (maps to owner:* labels)
+#   - Only Issue content (not pull requests or draft issues)
 #
 # Sorting:
-#   - priority:critical first, then priority:high, then priority:medium,
-#     then priority:low, then unprioritised issues last.
-#   - Within each priority band, oldest issues first.
+#   - Priority field: Critical → High → Medium → Low → unprioritised last
+#   - Within each priority band, oldest issues first (by createdAt)
 #
 # Output: If an issue is found, prints three lines:
 #   Line 1: owner label (e.g. "owner:lucos-developer")
@@ -27,106 +24,106 @@
 # If no implementable issue is found, prints an informational message and
 # exits with code 0.
 #
-# Authentication: uses lucos-issue-manager app credentials (read-only issue access).
+# Authentication: uses gh-projects (GITHUB_PROJECTS_PAT) — GitHub Apps cannot
+# access v2 user projects.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-TOKEN=$("$SCRIPT_DIR/get-token" --app lucos-issue-manager)
-
-# Wrapper: call GitHub API authenticated as lucos-issue-manager
-gh_api() {
-    gh api -H "Authorization: token $TOKEN" "$@"
-}
-
-# Fetch all unarchived repos owned by lucas42.
-REPOS=$(gh_api --paginate /users/lucas42/repos --jq '.[] | select(.archived == false) | .full_name')
-
-# Collect all matching issues into a temp file as a JSON array for sorting.
+# Fetch all project items in one query (project has <100 items, no pagination needed)
 TMPFILE=$(mktemp)
 trap 'rm -f "$TMPFILE"' EXIT
 
-echo "[]" > "$TMPFILE"
+"$SCRIPT_DIR/gh-projects" graphql -f query='
+{
+  node(id: "PVT_kwHOAAaLL84BRh5d") {
+    ... on ProjectV2 {
+      items(first: 100) {
+        nodes {
+          content {
+            ... on Issue {
+              number
+              title
+              url
+              createdAt
+            }
+          }
+          fieldValues(first: 10) {
+            nodes {
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+                field { ... on ProjectV2SingleSelectField { name } }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}' > "$TMPFILE"
 
-while IFS= read -r REPO; do
-    # Fetch open issues with agent-approved label.
-    # GitHub's issues API includes PRs; filter them out.
-    REPO_ISSUES=$(gh_api --paginate \
-        "/repos/${REPO}/issues?state=open&labels=agent-approved&per_page=100" \
-        --jq '[.[] | select(.pull_request == null)]' 2>/dev/null || echo "[]")
-
-    ISSUE_COUNT=$(echo "$REPO_ISSUES" | jq 'length')
-
-    if [[ "$ISSUE_COUNT" -eq 0 ]]; then
-        continue
-    fi
-
-    # Annotate each issue with its repo name, then append to the accumulated list
-    ANNOTATED=$(echo "$REPO_ISSUES" | jq --arg repo "$REPO" '[.[] | . + {_repo: $repo}]')
-    jq --argjson new "$ANNOTATED" '. + $new' "$TMPFILE" > "${TMPFILE}.new"
-    mv "${TMPFILE}.new" "$TMPFILE"
-
-done <<< "$REPOS"
-
-# Sort, filter, and output using Python
-_GET_ISSUES_TMPFILE="$TMPFILE" \
-python3 << 'PYEOF'
+_TMPFILE="$TMPFILE" python3 << 'PYEOF'
 import json
-import sys
 import os
+import sys
 
-tmpfile = os.environ["_GET_ISSUES_TMPFILE"]
-
-with open(tmpfile) as f:
-    all_issues = json.load(f)
+with open(os.environ["_TMPFILE"]) as f:
+    data = json.load(f)
+nodes = data["data"]["node"]["items"]["nodes"]
 
 PRIORITY_ORDER = {
-    "priority:critical": 0,
-    "priority:high": 1,
-    "priority:medium": 2,
-    "priority:low": 3,
+    "Critical": 0,
+    "High":     1,
+    "Medium":   2,
+    "Low":      3,
 }
 UNPRIORITISED = 4
 
-def get_label_names(issue):
-    return [l["name"] for l in issue.get("labels", [])]
+def get_field_values(node):
+    """Return a dict of field name -> option name for single-select fields."""
+    result = {}
+    for fv in node.get("fieldValues", {}).get("nodes", []):
+        if fv and "field" in fv and "name" in fv:
+            result[fv["field"]["name"]] = fv["name"]
+    return result
 
-def get_owner_label(issue):
-    for name in get_label_names(issue):
-        if name.startswith("owner:"):
-            return name
-    return None
-
-def sort_key(issue):
-    label_names = get_label_names(issue)
-    priority = UNPRIORITISED
-    for p, rank in PRIORITY_ORDER.items():
-        if p in label_names:
-            priority = rank
-            break
-    return (priority, issue.get("created_at", ""))
-
-# Filter: must have an owner label, must not be blocked
-filtered = []
-for issue in all_issues:
-    label_names = get_label_names(issue)
-    if "status:blocked" in label_names:
+ready_issues = []
+for node in nodes:
+    content = node.get("content")
+    # Skip non-Issue items (draft issues have no 'url', PRs won't appear here)
+    if not content or "url" not in content:
         continue
-    if get_owner_label(issue) is None:
+
+    fields = get_field_values(node)
+
+    if fields.get("Status") != "Ready":
         continue
-    filtered.append(issue)
 
-filtered.sort(key=sort_key)
+    owner_name = fields.get("Owner")
+    if not owner_name:
+        continue
 
-if not filtered:
-    print("No implementable issues found across any repository.")
+    priority = PRIORITY_ORDER.get(fields.get("Priority", ""), UNPRIORITISED)
+
+    ready_issues.append({
+        "number":     content["number"],
+        "title":      content["title"],
+        "url":        content["url"],
+        "created_at": content.get("createdAt", ""),
+        "owner":      owner_name,
+        "priority":   priority,
+    })
+
+ready_issues.sort(key=lambda i: (i["priority"], i["created_at"]))
+
+if not ready_issues:
+    print("No implementable issues found in the Ready column.")
     sys.exit(0)
 
-issue = filtered[0]
-owner = get_owner_label(issue)
-print(owner)
+issue = ready_issues[0]
+print(f"owner:{issue['owner']}")
 print(f"#{issue['number']} {issue['title']}")
-print(issue["html_url"])
+print(issue["url"])
 
 PYEOF
