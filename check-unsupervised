@@ -1,32 +1,41 @@
 #!/bin/bash
-# check-unsupervised <system-name>
-# Queries the configy API and prints whether unsupervisedAgentCode is set for the given system.
-# Exit code: 0 if YES, 1 if NO, 2 on error (system not found, API unreachable, etc.)
+# check-unsupervised <repo-name>
+# Queries the configy API (systems, components, and scripts) and prints whether
+# unsupervisedAgentCode is set for the given repo.
+# Exit code: 0 if YES, 1 if NO, 2 on error (not found in any endpoint, API unreachable, etc.)
 
 set -euo pipefail
 
 if [ $# -ne 1 ]; then
-    echo "Usage: check-unsupervised <system-name>" >&2
+    echo "Usage: check-unsupervised <repo-name>" >&2
     exit 2
 fi
 
 SYSTEM="$1"
-API_URL="https://configy.l42.eu/systems"
+BASE_URL="https://configy.l42.eu"
 
-curl -sL "$API_URL" | python3 -c "
-import json, sys
+python3 -c "
+import json, sys, urllib.request
 
 system = sys.argv[1]
-try:
-    data = json.load(sys.stdin)
-except json.JSONDecodeError as e:
-    print(f'ERROR: could not parse configy API response: {e}', file=sys.stderr)
-    sys.exit(2)
+base_url = sys.argv[2]
+endpoints = ['systems', 'components', 'scripts']
+all_entries = []
 
-match = next((s for s in data if s.get('id') == system), None)
+for endpoint in endpoints:
+    try:
+        with urllib.request.urlopen(f'{base_url}/{endpoint}') as resp:
+            data = json.load(resp)
+            if isinstance(data, list):
+                all_entries.extend(data)
+    except Exception as e:
+        print(f'ERROR: could not fetch {endpoint}: {e}', file=sys.stderr)
+        sys.exit(2)
+
+match = next((s for s in all_entries if s.get('id') == system), None)
 
 if match is None:
-    print(f\"ERROR: system '{system}' not found in configy\", file=sys.stderr)
+    print(f\"ERROR: '{system}' not found in configy (checked systems, components, scripts)\", file=sys.stderr)
     sys.exit(2)
 
 val = match.get('unsupervisedAgentCode', False)
@@ -36,4 +45,4 @@ if val:
 else:
     print(f'{system}: unsupervisedAgentCode = NO')
     sys.exit(1)
-" "$SYSTEM"
+" "$SYSTEM" "$BASE_URL"
