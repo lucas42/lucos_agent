@@ -31,4 +31,8 @@ if [ -z "$GITHUB_PROJECTS_PAT" ]; then
     exit 1
 fi
 
+# cd into the script's own directory so `gh api` has git context for placeholder
+# expansion (e.g. {owner}/{repo}). Without this, running from a non-git directory
+# causes "unable to expand placeholder in path: failed to run git".
+cd "$SCRIPT_DIR"
 gh api -H "Authorization: token $GITHUB_PROJECTS_PAT" "$@"
