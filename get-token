@@ -23,48 +23,52 @@ else
     exit 1
 fi
 
+# Token cache: reuse a cached token if it's less than 50 minutes old
+# (installation tokens are valid for 1 hour; 10-minute safety margin).
+CACHE_FILE="/tmp/gh-token-${APP_NAME}"
+CACHE_MAX_AGE=3000  # 50 minutes in seconds
+
+if [[ -f "$CACHE_FILE" ]]; then
+    CACHE_MTIME=$(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)
+    NOW_CHECK=$(date +%s)
+    if (( NOW_CHECK - CACHE_MTIME < CACHE_MAX_AGE )); then
+        cat "$CACHE_FILE"
+        exit 0
+    fi
+fi
+
 if [[ ! -f "$PERSONAS_FILE" ]]; then
     echo "Error: personas.json not found at $PERSONAS_FILE" >&2
     exit 1
 fi
 
 # Look up persona identity from personas.json (zero network dependencies)
-read -r APP_ID INSTALLATION_ID PEM_VAR < <(python3 -c "
-import json, sys
-with open('$PERSONAS_FILE') as f:
-    personas = json.load(f)
-if '$APP_NAME' not in personas:
-    valid = ', '.join(sorted(personas.keys()))
-    print(f'Error: Unknown app \\'$APP_NAME\\'. Valid options: {valid}', file=sys.stderr)
-    sys.exit(1)
-p = personas['$APP_NAME']
-print(p['app_id'], p['installation_id'], p['pem_var'])
-")
+if ! jq -e ".\"$APP_NAME\"" "$PERSONAS_FILE" > /dev/null 2>&1; then
+    valid=$(jq -r 'keys | sort | join(", ")' "$PERSONAS_FILE")
+    echo "Error: Unknown app '$APP_NAME'. Valid options: $valid" >&2
+    exit 1
+fi
+read -r APP_ID INSTALLATION_ID PEM_VAR < <(jq -r ".\"$APP_NAME\" | \"\(.app_id) \(.installation_id) \(.pem_var)\"" "$PERSONAS_FILE")
 
 if [[ ! -f "$ENV_FILE" ]]; then
     echo "Error: .env file not found at $ENV_FILE" >&2
     exit 1
 fi
 
-# Extract PEM from .env and restore newlines.
+# Extract PEM key value from .env and restore newlines.
 # lucos_creds flattens the key to a single line with spaces; base64 content
 # never contains spaces so replacing all spaces with newlines is safe.
-PEM_KEY=$(python3 -c "
-import re, sys
-with open('$ENV_FILE') as f:
-    content = f.read()
-match = re.search(r'${PEM_VAR}=\"(.*?)\"', content, re.DOTALL)
-if not match:
-    print('Error: ${PEM_VAR} not found in .env', file=sys.stderr)
-    sys.exit(1)
-val = match.group(1)
+PEM_RAW=$(grep -oP "${PEM_VAR}=\"\K[^\"]*" "$ENV_FILE" || true)
+if [[ -z "$PEM_RAW" ]]; then
+    echo "Error: ${PEM_VAR} not found in .env" >&2
+    exit 1
+fi
 # lucos_creds flattens newlines to spaces; the header/footer contain spaces
 # too, so we parse them out, fix only the body, then reassemble.
-import re as re2
-m = re2.search(r'(-----BEGIN RSA PRIVATE KEY-----)(.*?)(-----END RSA PRIVATE KEY-----)', val, re2.DOTALL)
-body = m.group(2).strip().replace(' ', '\n')
-print(f'{m.group(1)}\n{body}\n{m.group(3)}')
-")
+HEADER_LINE="-----BEGIN RSA PRIVATE KEY-----"
+FOOTER_LINE="-----END RSA PRIVATE KEY-----"
+BODY=$(echo "$PEM_RAW" | sed "s|$HEADER_LINE||;s|$FOOTER_LINE||" | tr ' ' '\n' | sed '/^$/d')
+PEM_KEY=$(printf '%s\n%s\n%s' "$HEADER_LINE" "$BODY" "$FOOTER_LINE")
 
 # Base64url encode (no padding)
 b64url() {
@@ -85,10 +89,17 @@ PAYLOAD=$(echo -n "{\"iat\":${IAT},\"exp\":${EXP},\"iss\":\"${APP_ID}\"}" | b64u
 SIGNATURE=$(echo -n "${HEADER}.${PAYLOAD}" | openssl dgst -sha256 -sign "$TMPKEY" | b64url)
 JWT="${HEADER}.${PAYLOAD}.${SIGNATURE}"
 
-# Exchange JWT for an installation access token
-curl -s -X POST \
+# Exchange JWT for an installation access token and cache the result
+TOKEN=$(curl -s -X POST \
     -H "Authorization: Bearer ${JWT}" \
     -H "Accept: application/vnd.github+json" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
     "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" \
-    | python3 -c "import sys, json; print(json.load(sys.stdin)['token'])"
+    | jq -r '.token')
+
+if [[ -n "$TOKEN" && "$TOKEN" != "null" ]]; then
+    echo "$TOKEN" > "$CACHE_FILE"
+    chmod 600 "$CACHE_FILE"
+fi
+
+echo "$TOKEN"
