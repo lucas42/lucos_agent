@@ -43,12 +43,12 @@ if [[ ! -f "$PERSONAS_FILE" ]]; then
 fi
 
 # Look up persona identity from personas.json (zero network dependencies)
-if ! jq -e ".\"$APP_NAME\"" "$PERSONAS_FILE" > /dev/null 2>&1; then
+if ! jq -e --arg app "$APP_NAME" '.[$app]' "$PERSONAS_FILE" > /dev/null 2>&1; then
     valid=$(jq -r 'keys | sort | join(", ")' "$PERSONAS_FILE")
     echo "Error: Unknown app '$APP_NAME'. Valid options: $valid" >&2
     exit 1
 fi
-read -r APP_ID INSTALLATION_ID PEM_VAR < <(jq -r ".\"$APP_NAME\" | \"\(.app_id) \(.installation_id) \(.pem_var)\"" "$PERSONAS_FILE")
+read -r APP_ID INSTALLATION_ID PEM_VAR < <(jq -r --arg app "$APP_NAME" '.[$app] | "\(.app_id) \(.installation_id) \(.pem_var)"' "$PERSONAS_FILE")
 
 if [[ ! -f "$ENV_FILE" ]]; then
     echo "Error: .env file not found at $ENV_FILE" >&2
@@ -98,8 +98,10 @@ TOKEN=$(curl -s -X POST \
     | jq -r '.token')
 
 if [[ -n "$TOKEN" && "$TOKEN" != "null" ]]; then
-    echo "$TOKEN" > "$CACHE_FILE"
-    chmod 600 "$CACHE_FILE"
+    TMPCACHE=$(mktemp /tmp/gh-token-XXXXXX)
+    chmod 600 "$TMPCACHE"
+    echo "$TOKEN" > "$TMPCACHE"
+    mv "$TMPCACHE" "$CACHE_FILE"
 fi
 
 echo "$TOKEN"
