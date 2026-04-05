@@ -17,7 +17,7 @@
   },
   "lucos-code-reviewer": {
     "display_name": "lucOS Code Reviewer",
-    "bot_name": "lucOS Code Reviewer[bot]",
+    "bot_name": "lucos-code-reviewer[bot]",
     "bot_user_id": "264151378",
     "app_id": "2956131",
     "installation_id": "112629982",
