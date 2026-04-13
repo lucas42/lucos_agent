@@ -9,7 +9,7 @@
 #
 # Filtering:
 #   - Only items with Status = "Ready" (option ID: bfb298e3)
-#   - Only items with an Owner field set (maps to owner:* labels)
+#   - Only items with an Owner (board field, or owner:* issue label as fallback)
 #   - Only Issue content (not pull requests or draft issues)
 #
 # Sorting:
@@ -46,6 +46,7 @@ trap 'rm -f "$TMPFILE"' EXIT
               number
               title
               url
+              labels(first: 10) { nodes { name } }
             }
           }
           fieldValues(first: 10) {
@@ -94,6 +95,12 @@ for node in nodes:
         continue
 
     owner_name = fields.get("Owner")
+    if not owner_name:
+        # Fall back to owner:* label on the issue itself
+        labels = [l["name"] for l in content.get("labels", {}).get("nodes", [])]
+        owner_labels = [l for l in labels if l.startswith("owner:")]
+        if owner_labels:
+            owner_name = owner_labels[0].removeprefix("owner:")
     if not owner_name:
         continue
 
