@@ -1,0 +1,10 @@
+{
+  "name": "lucos-ux-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright-based UX and accessibility assessment tools for lucos systems",
+  "type": "module",
+  "dependencies": {
+    "playwright": "^1.59.1"
+  }
+}
