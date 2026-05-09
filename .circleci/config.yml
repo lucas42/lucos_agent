@@ -1,0 +1,16 @@
+version: 2.1
+
+orbs:
+  lucos: lucos/deploy@0
+
+workflows:
+  # Runs daily at 03:00 UTC — well outside the 07:10 UTC Dependabot merge
+  # window — to safely prune old tagged images that accumulate over time.
+  # The -a flag is only safe outside concurrent deploys (see lucos_deploy_orb#54).
+  prune-images:
+    when:
+      equal: [ scheduled_pipeline, << pipeline.trigger.type >> ]
+    jobs:
+      - lucos/prune-images-avalon:
+          ssh-user: lucos-agent
+          ssh-key-fingerprint: "f3:64:6b:31:47:5c:fd:1b:fd:c6:0a:54:bf:09:6d:d1"
