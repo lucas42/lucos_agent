@@ -11,6 +11,7 @@ workflows:
     when:
       equal: [ scheduled_pipeline, << pipeline.trigger.type >> ]
     jobs:
-      - lucos/prune-images-avalon:
+      - lucos/prune-images:
+          host-domain: avalon.s.l42.eu
           ssh-user: lucos-agent
           ssh-key-fingerprint: "f3:64:6b:31:47:5c:fd:1b:fd:c6:0a:54:bf:09:6d:d1"
