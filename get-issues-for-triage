@@ -17,9 +17,15 @@
 #   4. Issues with some workflow labels (owner:*, priority:*, or status:*) but
 #      missing BOTH 'needs-refining' and 'agent-approved' — inconsistent label
 #      state, probably left in limbo by a manual label adjustment.
+#   5. Issues labelled 'agent-approved' where lucas42 has commented more recently
+#      than the most recent lucos-issue-manager[bot] comment (or there is no
+#      IM comment but lucas42 has commented) — lucas42 may have left revised
+#      scope or a clarification worth baking into the body.
 #
 # Exclusion criteria:
-#   - Issues labelled 'agent-approved' (already done).
+#   - Issues labelled 'agent-approved' where lucas42 has NOT commented more
+#     recently than the most recent lucos-issue-manager[bot] comment (i.e.
+#     normal fully-approved issues with no fresh owner activity).
 #   - Pull requests (GitHub's issues API includes PRs; filtered out).
 #   - Archived repositories (no active work happening there).
 #
@@ -57,91 +63,107 @@ while IFS= read -r REPO; do
         LABELS=$(echo "$ISSUE" | jq -r '[.labels[].name]')
         LABEL_COUNT=$(echo "$LABELS" | jq 'length')
 
-        # Always exclude issues labelled 'agent-approved'
-        IS_AGENT_APPROVED=$(echo "$LABELS" | jq -r 'map(select(. == "agent-approved")) | length > 0')
-        if [[ "$IS_AGENT_APPROVED" == "true" ]]; then
-            continue
-        fi
-
         INCLUDE="false"
 
-        # Criterion 1: Issues with no workflow labels need initial triage.
-        # Workflow labels are: needs-refining, agent-approved, owner:*, priority:*, status:*
-        # Non-workflow labels (bug, enhancement, audit-finding, etc.) don't count.
-        WORKFLOW_LABEL_COUNT=$(echo "$LABELS" | jq '[.[] | select(
-            . == "needs-refining" or
-            . == "agent-approved" or
-            startswith("owner:") or
-            startswith("priority:") or
-            startswith("status:")
-        )] | length')
-        if [[ "$WORKFLOW_LABEL_COUNT" -eq 0 ]]; then
-            INCLUDE="true"
-        fi
-
-        # Criterion 2: 'needs-refining' issues where the last commenter is not us
-        if [[ "$INCLUDE" == "false" ]]; then
-            IS_NEEDS_REFINING=$(echo "$LABELS" | jq -r 'map(select(. == "needs-refining")) | length > 0')
-            if [[ "$IS_NEEDS_REFINING" == "true" ]]; then
+        IS_AGENT_APPROVED=$(echo "$LABELS" | jq -r 'map(select(. == "agent-approved")) | length > 0')
+        if [[ "$IS_AGENT_APPROVED" == "true" ]]; then
+            # Criterion 5: agent-approved issues where lucas42 has commented more
+            # recently than the most recent lucos-issue-manager[bot] comment.
+            # Lazy fetch: if the issue has no comments at all, there is nothing
+            # to surface — skip the API call entirely.
+            ISSUE_COMMENT_COUNT=$(echo "$ISSUE" | jq -r '.comments')
+            if [[ "$ISSUE_COMMENT_COUNT" -gt 0 ]]; then
                 COMMENTS=$(gh_api --paginate \
                     "/repos/${REPO}/issues/${NUMBER}/comments?per_page=100" \
                     --jq '.' 2>/dev/null || echo "[]")
-
-                COMMENT_COUNT=$(echo "$COMMENTS" | jq 'length')
-                if [[ "$COMMENT_COUNT" -eq 0 ]]; then
-                    # No comments yet — include for initial triage
+                LUCAS42_LATEST=$(echo "$COMMENTS" | jq -r '[.[] | select(.user.login == "lucas42") | .created_at] | max // ""')
+                IM_LATEST=$(echo "$COMMENTS" | jq -r '[.[] | select(.user.login == "lucos-issue-manager[bot]") | .created_at] | max // ""')
+                # Include if lucas42 has commented AND (no IM comment OR lucas42 more recent)
+                if [[ -n "$LUCAS42_LATEST" ]] && [[ -z "$IM_LATEST" || "$LUCAS42_LATEST" > "$IM_LATEST" ]]; then
                     INCLUDE="true"
-                else
-                    LAST_COMMENT=$(echo "$COMMENTS" | jq '.[-1]')
-                    LAST_COMMENTER=$(echo "$LAST_COMMENT" | jq -r '.user.login')
-                    if [[ "$LAST_COMMENTER" != "lucos-issue-manager[bot]" ]]; then
-                        # Someone else acted last — needs a triage pass
+                fi
+            fi
+        else
+            # Criteria 1–4 for non-agent-approved issues
+
+            # Criterion 1: Issues with no workflow labels need initial triage.
+            # Workflow labels are: needs-refining, agent-approved, owner:*, priority:*, status:*
+            # Non-workflow labels (bug, enhancement, audit-finding, etc.) don't count.
+            WORKFLOW_LABEL_COUNT=$(echo "$LABELS" | jq '[.[] | select(
+                . == "needs-refining" or
+                . == "agent-approved" or
+                startswith("owner:") or
+                startswith("priority:") or
+                startswith("status:")
+            )] | length')
+            if [[ "$WORKFLOW_LABEL_COUNT" -eq 0 ]]; then
+                INCLUDE="true"
+            fi
+
+            # Criterion 2: 'needs-refining' issues where the last commenter is not us
+            if [[ "$INCLUDE" == "false" ]]; then
+                IS_NEEDS_REFINING=$(echo "$LABELS" | jq -r 'map(select(. == "needs-refining")) | length > 0')
+                if [[ "$IS_NEEDS_REFINING" == "true" ]]; then
+                    COMMENTS=$(gh_api --paginate \
+                        "/repos/${REPO}/issues/${NUMBER}/comments?per_page=100" \
+                        --jq '.' 2>/dev/null || echo "[]")
+
+                    COMMENT_COUNT=$(echo "$COMMENTS" | jq 'length')
+                    if [[ "$COMMENT_COUNT" -eq 0 ]]; then
+                        # No comments yet — include for initial triage
                         INCLUDE="true"
                     else
-                        # Last comment is ours — check if any comment in the
-                        # thread has reactions from a non-bot user (e.g. a +1
-                        # on a proposal from another agent).
-                        TOTAL_REACTIONS=$(echo "$COMMENTS" | jq '[.[].reactions.total_count] | add')
-                        if [[ "$TOTAL_REACTIONS" -gt 0 ]]; then
-                            # At least one comment has reactions — fetch details
-                            # for comments that have them and check for non-bot reactors.
-                            REACTED_IDS=$(echo "$COMMENTS" | jq -r '.[] | select(.reactions.total_count > 0) | .id')
-                            while IFS= read -r CID; do
-                                REACTORS=$(gh_api \
-                                    "/repos/${REPO}/issues/comments/${CID}/reactions" \
-                                    --jq '[.[].user.login | select(endswith("[bot]") | not)]' 2>/dev/null || echo "[]")
-                                if [[ $(echo "$REACTORS" | jq 'length') -gt 0 ]]; then
-                                    INCLUDE="true"
-                                    break
-                                fi
-                            done <<< "$REACTED_IDS"
+                        LAST_COMMENT=$(echo "$COMMENTS" | jq '.[-1]')
+                        LAST_COMMENTER=$(echo "$LAST_COMMENT" | jq -r '.user.login')
+                        if [[ "$LAST_COMMENTER" != "lucos-issue-manager[bot]" ]]; then
+                            # Someone else acted last — needs a triage pass
+                            INCLUDE="true"
+                        else
+                            # Last comment is ours — check if any comment in the
+                            # thread has reactions from a non-bot user (e.g. a +1
+                            # on a proposal from another agent).
+                            TOTAL_REACTIONS=$(echo "$COMMENTS" | jq '[.[].reactions.total_count] | add')
+                            if [[ "$TOTAL_REACTIONS" -gt 0 ]]; then
+                                # At least one comment has reactions — fetch details
+                                # for comments that have them and check for non-bot reactors.
+                                REACTED_IDS=$(echo "$COMMENTS" | jq -r '.[] | select(.reactions.total_count > 0) | .id')
+                                while IFS= read -r CID; do
+                                    REACTORS=$(gh_api \
+                                        "/repos/${REPO}/issues/comments/${CID}/reactions" \
+                                        --jq '[.[].user.login | select(endswith("[bot]") | not)]' 2>/dev/null || echo "[]")
+                                    if [[ $(echo "$REACTORS" | jq 'length') -gt 0 ]]; then
+                                        INCLUDE="true"
+                                        break
+                                    fi
+                                done <<< "$REACTED_IDS"
+                            fi
                         fi
                     fi
                 fi
             fi
-        fi
 
-        # Criterion 3: Explicitly routed to lucos-issue-manager
-        if [[ "$INCLUDE" == "false" ]]; then
-            IS_OWNER_ISSUE_MANAGER=$(echo "$LABELS" | jq -r 'map(select(. == "owner:lucos-issue-manager")) | length > 0')
-            if [[ "$IS_OWNER_ISSUE_MANAGER" == "true" ]]; then
-                INCLUDE="true"
+            # Criterion 3: Explicitly routed to lucos-issue-manager
+            if [[ "$INCLUDE" == "false" ]]; then
+                IS_OWNER_ISSUE_MANAGER=$(echo "$LABELS" | jq -r 'map(select(. == "owner:lucos-issue-manager")) | length > 0')
+                if [[ "$IS_OWNER_ISSUE_MANAGER" == "true" ]]; then
+                    INCLUDE="true"
+                fi
             fi
-        fi
 
-        # Criterion 4: Has some workflow labels but is missing both 'needs-refining'
-        # and 'agent-approved' — inconsistent state left by a manual label adjustment.
-        # (Criterion 1 already catches issues with NO workflow labels; this catches
-        # issues that have some but are in an ambiguous in-between state.)
-        if [[ "$INCLUDE" == "false" ]]; then
-            HAS_OWNER_OR_PRIORITY_OR_STATUS=$(echo "$LABELS" | jq -r '[.[] | select(
-                startswith("owner:") or
-                startswith("priority:") or
-                startswith("status:")
-            )] | length > 0')
-            HAS_NEEDS_REFINING=$(echo "$LABELS" | jq -r 'map(select(. == "needs-refining")) | length > 0')
-            if [[ "$HAS_OWNER_OR_PRIORITY_OR_STATUS" == "true" && "$HAS_NEEDS_REFINING" == "false" ]]; then
-                INCLUDE="true"
+            # Criterion 4: Has some workflow labels but is missing both 'needs-refining'
+            # and 'agent-approved' — inconsistent state left by a manual label adjustment.
+            # (Criterion 1 already catches issues with NO workflow labels; this catches
+            # issues that have some but are in an ambiguous in-between state.)
+            if [[ "$INCLUDE" == "false" ]]; then
+                HAS_OWNER_OR_PRIORITY_OR_STATUS=$(echo "$LABELS" | jq -r '[.[] | select(
+                    startswith("owner:") or
+                    startswith("priority:") or
+                    startswith("status:")
+                )] | length > 0')
+                HAS_NEEDS_REFINING=$(echo "$LABELS" | jq -r 'map(select(. == "needs-refining")) | length > 0')
+                if [[ "$HAS_OWNER_OR_PRIORITY_OR_STATUS" == "true" && "$HAS_NEEDS_REFINING" == "false" ]]; then
+                    INCLUDE="true"
+                fi
             fi
         fi
 
