@@ -1,203 +1,115 @@
 #!/bin/bash
 # Returns a JSON list of GitHub issues that need triage attention from lucos-issue-manager.
 #
-# Inclusion criteria (any one is sufficient):
-#   1. Issues with no workflow labels — have never been triaged; need initial
-#      triage. Workflow labels are: needs-refining, agent-approved, owner:*,
-#      priority:*, status:*. Non-workflow labels like 'bug', 'enhancement',
-#      'audit-finding' etc. do not count as triaged.
-#   2. Issues labelled 'needs-refining' where the most recent comment is NOT
-#      from lucos-issue-manager[bot] — an owner agent has probably completed
-#      work and the issue needs a label transition.
-#   2b. Issues labelled 'needs-refining' where the most recent comment IS from
-#       lucos-issue-manager[bot] but has reactions from a non-bot user — e.g.
-#       a +1 on a proposal counts as new activity that needs re-triage.
-#   3. Issues explicitly labelled 'owner:lucos-issue-manager' — the issue has
-#      been routed directly back to the issue manager.
-#   4. Issues with some workflow labels (owner:*, priority:*, or status:*) but
-#      missing BOTH 'needs-refining' and 'agent-approved' — inconsistent label
-#      state, probably left in limbo by a manual label adjustment.
-#   5. Issues labelled 'agent-approved' where lucas42 has commented more recently
-#      than the most recent lucos-issue-manager[bot] comment (or there is no
-#      IM comment but lucas42 has commented) — lucas42 may have left revised
-#      scope or a clarification worth baking into the body.
+# FIELD MAPPING: label-based → project field-based
+# =================================================
+# | Old (label)                              | New (project field)                    |
+# | ---------------------------------------- | -------------------------------------- |
+# | Has agent-approved                       | Status = Ready                         |
+# | Has needs-refining                       | Status ∈ {Ideation, Awaiting Decision} |
+# | Has status:blocked                       | Status = Blocked                       |
+# | Has owner:lucos-issue-manager            | Owner = lucos-issue-manager            |
+# | Has any owner:*/priority:*/status:*      | Has any Owner/Priority/Status set      |
+# | No workflow labels (untriaged)           | Not on board, OR Status = Needs Triage |
 #
-# Exclusion criteria:
-#   - Issues labelled 'agent-approved' where lucas42 has NOT commented more
-#     recently than the most recent lucos-issue-manager[bot] comment (i.e.
-#     normal fully-approved issues with no fresh owner activity).
-#   - Pull requests (GitHub's issues API includes PRs; filtered out).
-#   - Archived repositories (no active work happening there).
+# Note: status:needs-design has no project field equivalent and is not queried
+#       (dropped per lucas42/lucos_claude_config#73 option d).
+# Note: the label audit-finding is exempt from this migration; not queried here.
+#
+# Inclusion criteria (any one is sufficient):
+#   1. Status = "Needs Triage" on the project board, OR not on the board at all
+#      (fallback) — issue has never been through a full triage pass.
+#   2. Status ∈ {Ideation, Awaiting Decision} where the most recent comment is
+#      NOT from lucos-issue-manager[bot] — an owner agent has probably completed
+#      work and the issue needs a status transition.
+#   2b. Status ∈ {Ideation, Awaiting Decision} where the most recent comment IS
+#       from lucos-issue-manager[bot] but has reactions from a non-bot user —
+#       e.g. a +1 on a proposal counts as new activity that needs re-triage.
+#   3. Owner = lucos-issue-manager — explicitly routed back to the issue manager.
+#   4. Has Owner or Priority set on the board but Status is null — inconsistent
+#      state, probably left by a failed or incomplete triage action.
+#   5. Status = Ready where lucas42 has commented more recently than the most
+#      recent lucos-issue-manager[bot] comment — lucas42 may have revised scope.
+#
+# Exclusion: Status = Done or Blocked are never surfaced for triage.
 #
 # Output: JSON array of objects with keys: repo, number, title, url, labels
 #
-# Authentication: uses the lucos-issue-manager GitHub App via get-token.
+# Authentication:
+#   - Project board (GraphQL):  ~/sandboxes/lucos_agent/gh-projects (GITHUB_PROJECTS_PAT)
+#   - GitHub REST API:           lucos-issue-manager GitHub App token
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOKEN=$("$SCRIPT_DIR/get-token" --app "lucos-issue-manager")
 
-# Wrapper: call GitHub API authenticated as lucos-issue-manager
-gh_api() {
-    gh api -H "Authorization: token $TOKEN" "$@"
-}
+ISSUE_MANAGER_TOKEN="$TOKEN" \
+GH_PROJECTS="$SCRIPT_DIR/gh-projects" \
+python3 << 'PYEOF'
 
-# Fetch all non-archived repos owned by lucas42
-REPOS=$(gh_api --paginate /users/lucas42/repos --jq '.[] | select(.archived == false) | .full_name')
-
-issues_json="[]"
-
-while IFS= read -r REPO; do
-    # Fetch all open issues for this repo, excluding pull requests.
-    # We fetch everything and filter client-side to apply the label logic below.
-    REPO_ISSUES=$(gh_api --paginate \
-        "/repos/${REPO}/issues?state=open&per_page=100" \
-        --jq '[.[] | select(.pull_request == null)]' 2>/dev/null || echo "[]")
-
-    # Process each issue
-    while IFS= read -r ISSUE; do
-        NUMBER=$(echo "$ISSUE" | jq -r '.number')
-        TITLE=$(echo "$ISSUE" | jq -r '.title')
-        URL=$(echo "$ISSUE" | jq -r '.html_url')
-        LABELS=$(echo "$ISSUE" | jq -r '[.labels[].name]')
-        LABEL_COUNT=$(echo "$LABELS" | jq 'length')
-
-        INCLUDE="false"
-
-        IS_AGENT_APPROVED=$(echo "$LABELS" | jq -r 'map(select(. == "agent-approved")) | length > 0')
-        if [[ "$IS_AGENT_APPROVED" == "true" ]]; then
-            # Criterion 5: agent-approved issues where lucas42 has commented more
-            # recently than the most recent lucos-issue-manager[bot] comment.
-            # Lazy fetch: if the issue has no comments at all, there is nothing
-            # to surface — skip the API call entirely.
-            ISSUE_COMMENT_COUNT=$(echo "$ISSUE" | jq -r '.comments')
-            if [[ "$ISSUE_COMMENT_COUNT" -gt 0 ]]; then
-                COMMENTS=$(gh_api --paginate \
-                    "/repos/${REPO}/issues/${NUMBER}/comments?per_page=100" \
-                    --jq '.' 2>/dev/null || echo "[]")
-                LUCAS42_LATEST=$(echo "$COMMENTS" | jq -r '[.[] | select(.user.login == "lucas42") | .created_at] | max // ""')
-                IM_LATEST=$(echo "$COMMENTS" | jq -r '[.[] | select(.user.login == "lucos-issue-manager[bot]") | .created_at] | max // ""')
-                # Include if lucas42 has commented AND (no IM comment OR lucas42 more recent)
-                if [[ -n "$LUCAS42_LATEST" ]] && [[ -z "$IM_LATEST" || "$LUCAS42_LATEST" > "$IM_LATEST" ]]; then
-                    INCLUDE="true"
-                fi
-            fi
-        else
-            # Criteria 1–4 for non-agent-approved issues
-
-            # Criterion 1: Issues with no workflow labels need initial triage.
-            # Workflow labels are: needs-refining, agent-approved, owner:*, priority:*, status:*
-            # Non-workflow labels (bug, enhancement, audit-finding, etc.) don't count.
-            WORKFLOW_LABEL_COUNT=$(echo "$LABELS" | jq '[.[] | select(
-                . == "needs-refining" or
-                . == "agent-approved" or
-                startswith("owner:") or
-                startswith("priority:") or
-                startswith("status:")
-            )] | length')
-            if [[ "$WORKFLOW_LABEL_COUNT" -eq 0 ]]; then
-                INCLUDE="true"
-            fi
-
-            # Criterion 2: 'needs-refining' issues where the last commenter is not us
-            if [[ "$INCLUDE" == "false" ]]; then
-                IS_NEEDS_REFINING=$(echo "$LABELS" | jq -r 'map(select(. == "needs-refining")) | length > 0')
-                if [[ "$IS_NEEDS_REFINING" == "true" ]]; then
-                    COMMENTS=$(gh_api --paginate \
-                        "/repos/${REPO}/issues/${NUMBER}/comments?per_page=100" \
-                        --jq '.' 2>/dev/null || echo "[]")
-
-                    COMMENT_COUNT=$(echo "$COMMENTS" | jq 'length')
-                    if [[ "$COMMENT_COUNT" -eq 0 ]]; then
-                        # No comments yet — include for initial triage
-                        INCLUDE="true"
-                    else
-                        LAST_COMMENT=$(echo "$COMMENTS" | jq '.[-1]')
-                        LAST_COMMENTER=$(echo "$LAST_COMMENT" | jq -r '.user.login')
-                        if [[ "$LAST_COMMENTER" != "lucos-issue-manager[bot]" ]]; then
-                            # Someone else acted last — needs a triage pass
-                            INCLUDE="true"
-                        else
-                            # Last comment is ours — check if any comment in the
-                            # thread has reactions from a non-bot user (e.g. a +1
-                            # on a proposal from another agent).
-                            TOTAL_REACTIONS=$(echo "$COMMENTS" | jq '[.[].reactions.total_count] | add')
-                            if [[ "$TOTAL_REACTIONS" -gt 0 ]]; then
-                                # At least one comment has reactions — fetch details
-                                # for comments that have them and check for non-bot reactors.
-                                REACTED_IDS=$(echo "$COMMENTS" | jq -r '.[] | select(.reactions.total_count > 0) | .id')
-                                while IFS= read -r CID; do
-                                    REACTORS=$(gh_api \
-                                        "/repos/${REPO}/issues/comments/${CID}/reactions" \
-                                        --jq '[.[].user.login | select(endswith("[bot]") | not)]' 2>/dev/null || echo "[]")
-                                    if [[ $(echo "$REACTORS" | jq 'length') -gt 0 ]]; then
-                                        INCLUDE="true"
-                                        break
-                                    fi
-                                done <<< "$REACTED_IDS"
-                            fi
-                        fi
-                    fi
-                fi
-            fi
-
-            # Criterion 3: Explicitly routed to lucos-issue-manager
-            if [[ "$INCLUDE" == "false" ]]; then
-                IS_OWNER_ISSUE_MANAGER=$(echo "$LABELS" | jq -r 'map(select(. == "owner:lucos-issue-manager")) | length > 0')
-                if [[ "$IS_OWNER_ISSUE_MANAGER" == "true" ]]; then
-                    INCLUDE="true"
-                fi
-            fi
-
-            # Criterion 4: Has some workflow labels but is missing both 'needs-refining'
-            # and 'agent-approved' — inconsistent state left by a manual label adjustment.
-            # (Criterion 1 already catches issues with NO workflow labels; this catches
-            # issues that have some but are in an ambiguous in-between state.)
-            if [[ "$INCLUDE" == "false" ]]; then
-                HAS_OWNER_OR_PRIORITY_OR_STATUS=$(echo "$LABELS" | jq -r '[.[] | select(
-                    startswith("owner:") or
-                    startswith("priority:") or
-                    startswith("status:")
-                )] | length > 0')
-                HAS_NEEDS_REFINING=$(echo "$LABELS" | jq -r 'map(select(. == "needs-refining")) | length > 0')
-                if [[ "$HAS_OWNER_OR_PRIORITY_OR_STATUS" == "true" && "$HAS_NEEDS_REFINING" == "false" ]]; then
-                    INCLUDE="true"
-                fi
-            fi
-        fi
-
-        if [[ "$INCLUDE" == "false" ]]; then
-            continue
-        fi
-
-        # Append this issue to the results
-        ISSUE_ENTRY=$(jq -n \
-            --arg repo "$REPO" \
-            --argjson number "$NUMBER" \
-            --arg title "$TITLE" \
-            --arg url "$URL" \
-            --argjson labels "$LABELS" \
-            '{repo: $repo, number: $number, title: $title, url: $url, labels: $labels}')
-
-        issues_json=$(echo "$issues_json" | jq --argjson entry "$ISSUE_ENTRY" '. + [$entry]')
-
-    done < <(echo "$REPO_ISSUES" | jq -c '.[]' 2>/dev/null || true)
-
-done <<< "$REPOS"
-
-# Also include issues in the "Needs Triage" column of the project board.
-# (Status option ID: d5369b39)
-# These may not yet have workflow labels, so the label-based logic above may
-# not have caught them. We merge and deduplicate by URL.
-# The board may have 200+ items, so we paginate until hasNextPage is false.
-BOARD_ISSUES=$(GH_PROJECTS="$SCRIPT_DIR/gh-projects" python3 << 'PYEOF'
 import json, os, subprocess, sys
+from urllib.parse import quote
 
-gh_projects = os.environ["GH_PROJECTS"]
+TOKEN      = os.environ["ISSUE_MANAGER_TOKEN"]
+GH_PROJECTS = os.environ["GH_PROJECTS"]
 
-QUERY_TEMPLATE = """
-{
+# ── Constants ──────────────────────────────────────────────────────────────────
+
+NEEDS_REFINING_STATUSES = {"Ideation", "Awaiting Decision"}
+READY_STATUS        = "Ready"
+BLOCKED_STATUS      = "Blocked"
+DONE_STATUS         = "Done"
+NEEDS_TRIAGE_STATUS = "Needs Triage"
+ISSUE_MANAGER_OWNER = "lucos-issue-manager"
+
+WORKFLOW_LABEL_PREFIXES = ("owner:", "priority:", "status:")
+WORKFLOW_LABELS_EXACT   = {"needs-refining", "agent-approved"}
+
+# ── GitHub REST API helper ─────────────────────────────────────────────────────
+
+def gh_rest(path, paginate=False):
+    """Call the GitHub REST API authenticated as lucos-issue-manager.
+
+    When paginate=True, uses --paginate --jq '.[]' to stream all pages as JSONL
+    and returns a flat list of objects. When paginate=False, returns the parsed
+    JSON of the single response (dict or list), or None on error.
+    """
+    cmd = ["gh", "api", "-H", f"Authorization: token {TOKEN}"]
+    if paginate:
+        cmd += ["--paginate", "--jq", ".[]"]
+    cmd.append(path)
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0 or not r.stdout.strip():
+        return [] if paginate else None
+    if paginate:
+        items = []
+        for line in r.stdout.strip().splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    items.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+        return items
+    try:
+        return json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return None
+
+def fetch_comments(repo, number):
+    return gh_rest(
+        f"/repos/{repo}/issues/{number}/comments?per_page=100",
+        paginate=True,
+    )
+
+def fetch_reactions(repo, comment_id):
+    result = gh_rest(f"/repos/{repo}/issues/comments/{comment_id}/reactions")
+    return result if isinstance(result, list) else []
+
+# ── Project board query (paginated) ───────────────────────────────────────────
+
+BOARD_QUERY = """{
   node(id: "PVT_kwHOAAaLL84BRh5d") {
     ... on ProjectV2 {
       items(first: 100%s) {
@@ -210,6 +122,7 @@ QUERY_TEMPLATE = """
               url
               repository { nameWithOwner }
               labels(first: 20) { nodes { name } }
+              comments { totalCount }
             }
           }
           fieldValues(first: 10) {
@@ -224,57 +137,194 @@ QUERY_TEMPLATE = """
       }
     }
   }
-}
-"""
+}"""
 
-all_nodes = []
-cursor = None
+def fetch_board_items():
+    """Return all project board nodes, paginating until exhausted."""
+    all_nodes = []
+    cursor = None
+    while True:
+        after = f', after: "{cursor}"' if cursor else ""
+        r = subprocess.run(
+            [GH_PROJECTS, "graphql", "-f", f"query={BOARD_QUERY % after}"],
+            capture_output=True, text=True, check=True,
+        )
+        data  = json.loads(r.stdout)
+        items = data["data"]["node"]["items"]
+        all_nodes.extend(items["nodes"])
+        if not items["pageInfo"]["hasNextPage"]:
+            break
+        cursor = items["pageInfo"]["endCursor"]
+    return all_nodes
 
-while True:
-    after_arg = f', after: "{cursor}"' if cursor else ""
-    query = QUERY_TEMPLATE % after_arg
-    result = subprocess.run(
-        [gh_projects, "graphql", "-f", f"query={query}"],
-        capture_output=True, text=True, check=True
-    )
-    data = json.loads(result.stdout)
-    items = data["data"]["node"]["items"]
-    all_nodes.extend(items["nodes"])
-    if not items["pageInfo"]["hasNextPage"]:
-        break
-    cursor = items["pageInfo"]["endCursor"]
-
-results = []
-for node in all_nodes:
-    content = node.get("content")
-    if not content or "url" not in content:
-        continue
-    fields = {
+def get_fields(node):
+    """Return {field_name: option_name} for all single-select field values."""
+    return {
         fv["field"]["name"]: fv["name"]
         for fv in node.get("fieldValues", {}).get("nodes", [])
-        if fv and "field" in fv
+        if fv and "field" in fv and "name" in fv
     }
-    if fields.get("Status") != "Needs Triage":
+
+# ── Comment analysis helpers ───────────────────────────────────────────────────
+
+def should_include_refining(repo, number, comment_count):
+    """Criteria 2 / 2b: surface if there is activity the issue manager should see.
+
+    Returns True when:
+    - No comments exist (needs initial triage pass), OR
+    - Last commenter is not lucos-issue-manager[bot] (someone else acted), OR
+    - Last commenter IS lucos-issue-manager[bot] but a non-bot user has reacted
+      to at least one comment (e.g. a +1 on a proposal).
+    """
+    if comment_count == 0:
+        return True  # Never had a triage comment — needs initial pass
+
+    comments = fetch_comments(repo, number)
+    if not comments:
+        return True
+
+    last_commenter = comments[-1].get("user", {}).get("login", "")
+    if last_commenter != "lucos-issue-manager[bot]":
+        return True  # Someone else acted last — needs re-triage
+
+    # Last comment is ours; check for non-bot reactions on any comment
+    for c in comments:
+        if c.get("reactions", {}).get("total_count", 0) > 0:
+            reactions = fetch_reactions(repo, c["id"])
+            if any(
+                not r.get("user", {}).get("login", "").endswith("[bot]")
+                for r in reactions
+            ):
+                return True
+
+    return False
+
+def should_include_ready(repo, number, comment_count):
+    """Criterion 5: surface if lucas42 has commented more recently than issue manager.
+
+    Returns True when lucas42 has at least one comment AND either:
+    - lucos-issue-manager[bot] has never commented, OR
+    - lucas42's most recent comment is newer than the issue manager's.
+    """
+    if comment_count == 0:
+        return False  # No activity — nothing to surface
+
+    comments = fetch_comments(repo, number)
+    lucas42_latest = max(
+        (c["created_at"] for c in comments if c.get("user", {}).get("login") == "lucas42"),
+        default="",
+    )
+    im_latest = max(
+        (c["created_at"] for c in comments if c.get("user", {}).get("login") == "lucos-issue-manager[bot]"),
+        default="",
+    )
+    return bool(lucas42_latest) and (not im_latest or lucas42_latest > im_latest)
+
+# ── Phase 1: Project board scan (primary) ─────────────────────────────────────
+
+board_nodes = fetch_board_items()
+results    = []
+board_urls = set()
+
+for node in board_nodes:
+    content = node.get("content")
+    if not content or "url" not in content:
+        continue  # Draft issue or non-issue board item
+
+    url = content["url"]
+    board_urls.add(url)
+
+    fields        = get_fields(node)
+    status        = fields.get("Status")
+    owner         = fields.get("Owner")
+    priority      = fields.get("Priority")
+    repo          = content["repository"]["nameWithOwner"]
+    number        = content["number"]
+    comment_count = content.get("comments", {}).get("totalCount", 0)
+    labels        = [l["name"] for l in content.get("labels", {}).get("nodes", [])]
+
+    include = False
+
+    if status in (DONE_STATUS, BLOCKED_STATUS):
+        pass  # Never surface Done or Blocked issues
+
+    elif owner == ISSUE_MANAGER_OWNER:
+        include = True  # Criterion 3: explicitly routed to issue manager
+
+    elif status == NEEDS_TRIAGE_STATUS:
+        include = True  # Criterion 1 (board): just added, needs initial triage
+
+    elif status in NEEDS_REFINING_STATUSES:
+        # Criteria 2 / 2b: in-progress refinement — check for new activity
+        include = should_include_refining(repo, number, comment_count)
+
+    elif status == READY_STATUS:
+        # Criterion 5: ready for dispatch — surface if lucas42 has revised scope
+        include = should_include_ready(repo, number, comment_count)
+
+    elif (owner or priority) and not status:
+        include = True  # Criterion 4: has fields but no Status — inconsistent state
+
+    if include:
+        results.append({
+            "repo":   repo,
+            "number": number,
+            "title":  content["title"],
+            "url":    url,
+            "labels": labels,
+        })
+
+# ── Phase 2: Label-based fallback for issues not yet on the board ──────────────
+#
+# Catches newly-raised issues that haven't been added to the project board yet
+# (criterion 1 fallback). Uses a thin GitHub Search query rather than the
+# expensive per-repo issue scan from the old implementation.
+#
+# This section can be removed once the estate-wide label deletion is complete
+# and all issues land on the board automatically on creation.
+
+def has_workflow_labels(labels):
+    return any(
+        l in WORKFLOW_LABELS_EXACT or any(l.startswith(p) for p in WORKFLOW_LABEL_PREFIXES)
+        for l in labels
+    )
+
+# Build the set of active (non-archived) repos to filter search results.
+repos_data   = gh_rest("/users/lucas42/repos?per_page=100&type=owner", paginate=True) or []
+active_repos = {r["full_name"] for r in repos_data if not r.get("archived", False)}
+
+# Single search query: open issues without the primary workflow labels, non-archived.
+# Client-side filtering removes any residual owner:*/priority:*/status:* labels
+# and any issues already covered by the board scan above.
+search_query  = quote(
+    "is:issue is:open user:lucas42 -label:needs-refining -label:agent-approved archived:false"
+)
+search_result = gh_rest(f"/search/issues?q={search_query}&per_page=100") or {}
+
+for item in (search_result.get("items") or []):
+    if item.get("pull_request"):
         continue
-    labels = [l["name"] for l in content.get("labels", {}).get("nodes", [])]
+    url = item["html_url"]
+    if url in board_urls:
+        continue  # Already covered by the board scan
+
+    labels = [l["name"] for l in item.get("labels", [])]
+    if has_workflow_labels(labels):
+        continue  # Has residual workflow labels — board scan should cover it
+
+    # Derive repo name from repository_url (e.g. https://api.github.com/repos/lucas42/foo)
+    repo_url = item.get("repository_url", "")
+    repo     = "/".join(repo_url.rstrip("/").split("/")[-2:]) if repo_url else ""
+    if repo not in active_repos:
+        continue  # Archived or unknown repo — skip
+
     results.append({
-        "repo":   content["repository"]["nameWithOwner"],
-        "number": content["number"],
-        "title":  content["title"],
-        "url":    content["url"],
+        "repo":   repo,
+        "number": item["number"],
+        "title":  item["title"],
+        "url":    url,
         "labels": labels,
     })
 
 print(json.dumps(results))
 PYEOF
-)
-
-# Merge board issues into issues_json, deduplicating by URL
-issues_json=$(echo "$issues_json" | jq \
-    --argjson board "$BOARD_ISSUES" \
-    'reduce $board[] as $item (
-        .;
-        if any(.[]; .url == $item.url) then . else . + [$item] end
-    )')
-
-echo "$issues_json"
