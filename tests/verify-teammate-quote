@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# Smoke test for verify-teammate-quote
+#
+# Verifies the script against a known-good jsonl entry from the 2026-05-14
+# phantom-teammate-message incident.  The fixture is real production data on
+# disk, not a synthetic file, so this confirms both the parsing logic and the
+# real session corpus.
+#
+# Session 08b44d67 belongs to lucos-site-reliability (2026-05-13, the evening
+# of the incident).  lucos-site-reliability was the persona that correctly
+# pushed back on the coordinator's phantom accusations.  The first message in
+# the session — "lucos-site-reliability here, standing by for instructions." —
+# is a clean, unambiguous, role:assistant entry at line 9.
+#
+# Reference: github.com/lucas42/lucos/pull/151
+#
+# Usage: tests/verify-teammate-quote  (run from the lucos_agent repo root)
+
+set -euo pipefail
+
+SCRIPT="$(dirname "$0")/../verify-teammate-quote"
+KNOWN_SESSION="08b44d67-2961-4143-8660-23b7198cbd0e"
+KNOWN_SENDER="lucos-site-reliability"
+KNOWN_QUOTE="lucos-site-reliability here, standing by for instructions."
+ABSENT_QUOTE="__verify_teammate_quote_test_string_that_cannot_appear_in_any_session__"
+
+PASS=0
+FAIL=0
+
+check() {
+    local desc="$1"
+    local expected_exit="$2"
+    shift 2
+    local actual_exit=0
+    "$SCRIPT" "$@" > /dev/null 2>&1 || actual_exit=$?
+    if [[ "$actual_exit" -eq "$expected_exit" ]]; then
+        echo "  PASS  $desc"
+        PASS=$((PASS + 1))
+    else
+        echo "  FAIL  $desc (expected exit $expected_exit, got $actual_exit)"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+echo "verify-teammate-quote smoke tests"
+echo "----------------------------------"
+
+# --- Happy path: real incident-session quote, verified ---
+check "known good quote exits 0" 0 \
+    --sender "$KNOWN_SENDER" \
+    --session "$KNOWN_SESSION" \
+    --quote  "$KNOWN_QUOTE"
+
+# --- Happy path: --json flag still exits 0 on a match ---
+check "known good quote with --json exits 0" 0 \
+    --sender "$KNOWN_SENDER" \
+    --session "$KNOWN_SESSION" \
+    --quote  "$KNOWN_QUOTE" \
+    --json
+
+# --- Not found: invented text exits 1 ---
+check "absent quote exits 1" 1 \
+    --sender "$KNOWN_SENDER" \
+    --session "$KNOWN_SESSION" \
+    --quote  "$ABSENT_QUOTE"
+
+# --- Wrong sender: real quote attributed to a different persona exits 1 ---
+check "real quote attributed to wrong sender exits 1" 1 \
+    --sender "lucos-architect" \
+    --session "$KNOWN_SESSION" \
+    --quote  "$KNOWN_QUOTE"
+
+# --- Usage error: missing --quote exits 2 ---
+actual_exit=0
+"$SCRIPT" --sender "$KNOWN_SENDER" > /dev/null 2>&1 || actual_exit=$?
+if [[ "$actual_exit" -eq 2 ]]; then
+    echo "  PASS  missing --quote exits 2"
+    PASS=$((PASS + 1))
+else
+    echo "  FAIL  missing --quote (expected exit 2, got $actual_exit)"
+    FAIL=$((FAIL + 1))
+fi
+
+echo "----------------------------------"
+echo "Results: $PASS passed, $FAIL failed"
+
+[[ "$FAIL" -eq 0 ]]
