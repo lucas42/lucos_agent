@@ -1,10 +1,13 @@
 #!/bin/bash
-# create-pr --app <app> --repo <repo> --title <title> --body-file <file> --head <branch> --base <base>
+# create-pr --app <app> --repo <repo> --title <title> --body-file <file> --head <branch> --base <base> [--draft]
 #
 # Creates a pull request via the GitHub API and, if the repo is supervised
 # (check-unsupervised exits 1), immediately requests lucas42 as a reviewer.
 # Combining both actions in one script means the reviewer step can never be
 # forgotten or skipped when creating a PR.
+#
+# Pass --draft to open the PR in draft state. Reviewer requests are skipped
+# for draft PRs (they are not yet ready for review).
 #
 # Outputs: the PR URL (html_url) on success.
 # Exit code: 0 on success, non-zero on error.
@@ -14,7 +17,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
-    echo "Usage: create-pr --app <app> --repo <repo> --title <title> --body-file <file> --head <branch> --base <base>" >&2
+    echo "Usage: create-pr --app <app> --repo <repo> --title <title> --body-file <file> --head <branch> --base <base> [--draft]" >&2
     exit 2
 }
 
@@ -24,6 +27,7 @@ TITLE=""
 BODY_FILE=""
 HEAD=""
 BASE="main"
+DRAFT="false"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -33,6 +37,7 @@ while [[ $# -gt 0 ]]; do
         --body-file) BODY_FILE="$2"; shift 2 ;;
         --head)      HEAD="$2";      shift 2 ;;
         --base)      BASE="$2";      shift 2 ;;
+        --draft)     DRAFT="true";   shift ;;
         *) usage ;;
     esac
 done
@@ -52,6 +57,7 @@ PR_RESPONSE=$(
         --field "title=$TITLE" \
         --field "head=$HEAD" \
         --field "base=$BASE" \
+        --field "draft=$DRAFT" \
         --field "body=@$BODY_FILE"
 )
 
@@ -60,8 +66,10 @@ PR_URL=$(echo    "$PR_RESPONSE" | python3 -c "import json,sys; print(json.load(s
 
 echo "$PR_URL"
 
-# Step 2: Request lucas42 as reviewer if the repo is supervised
-if ! "$SCRIPT_DIR/check-unsupervised" "$REPO" > /dev/null 2>&1; then
+# Step 2: Request lucas42 as reviewer if the repo is supervised (skip for drafts).
+if [[ "$DRAFT" == "true" ]]; then
+    echo "Draft PR — skipping reviewer request until marked ready" >&2
+elif ! "$SCRIPT_DIR/check-unsupervised" "$REPO" > /dev/null 2>&1; then
     echo "Repo is supervised — requesting lucas42 as reviewer on PR #$PR_NUMBER" >&2
     "$SCRIPT_DIR/gh-as-agent" --app "$APP" \
         "repos/lucas42/$REPO/pulls/$PR_NUMBER/requested_reviewers" \
