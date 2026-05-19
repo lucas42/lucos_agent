@@ -10,6 +10,32 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Print gh-as-agent usage (not gh api usage) when --help is requested.
+# Must be checked before --app parsing so 'gh-as-agent --help' works without --app.
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    cat <<'ENDHELP'
+gh-as-agent — wrapper around 'gh api' that authenticates as a lucos GitHub App.
+
+Usage:
+  gh-as-agent --app <app_name> <REST API path> [gh api flags...]
+
+  --app <app_name>  Required. GitHub App persona name (e.g. lucos-system-administrator).
+                    Persona names are defined in personas.json in the same directory.
+
+Examples:
+  gh-as-agent --app lucos-system-administrator repos/lucas42/lucos/issues \
+      --method POST -f title="..." -f body="..."
+  gh-as-agent --app lucos-code-reviewer repos/lucas42/lucos/pulls/123/reviews \
+      --method POST -f event=APPROVE -f body="LGTM"
+
+Notes:
+  - Pass a REST API path, not a 'gh' subcommand (e.g. repos/…, not 'issue' or 'pr').
+  - Do not prefix the path with 'api' — gh-as-agent already runs 'gh api' internally.
+  - All gh api flags (--method, --jq, -f, --paginate, etc.) are passed through directly.
+ENDHELP
+    exit 0
+fi
+
 # Parse --app flag (must be first argument; required — no default)
 if [[ "${1:-}" == "--app" ]]; then
     APP_NAME="${2:?--app requires an argument}"
@@ -19,6 +45,24 @@ else
     "$SCRIPT_DIR/get-token"  # will print the error and exit 1
     exit 1  # belt and braces
 fi
+
+# Pre-flight check: catch common mis-invocations before forwarding to gh api,
+# where the errors are cryptic and point to the wrong part of the call.
+FIRST_ARG="${1:-}"
+case "$FIRST_ARG" in
+    api)
+        echo "gh-as-agent: error: gh-as-agent already runs 'gh api' — drop the leading 'api'." >&2
+        echo "  Correct:  gh-as-agent --app <name> repos/OWNER/REPO/issues/N" >&2
+        exit 1
+        ;;
+    issue|pr|repo|release|search|auth|run|workflow|secret|label|project|gist)
+        echo "gh-as-agent: error: '$FIRST_ARG' is a 'gh' subcommand, but gh-as-agent wraps 'gh api' directly." >&2
+        echo "  Use a REST API path instead, e.g.:" >&2
+        echo "  gh-as-agent --app <name> repos/OWNER/REPO/issues/N" >&2
+        echo "  gh-as-agent --app <name> repos/OWNER/REPO/issues --method POST -f title='...' -f body='...'" >&2
+        exit 1
+        ;;
+esac
 
 # cd into the script's own directory so `gh api` has git context for placeholder
 # expansion (e.g. {owner}/{repo}). Without this, running from a non-git directory
