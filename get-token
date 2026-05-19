@@ -55,16 +55,32 @@ if [[ ! -f "$ENV_FILE" ]]; then
     exit 1
 fi
 
-# Extract PEM key value from .env and restore newlines.
-# lucos_creds flattens the key to a single line with spaces; base64 content
-# never contains spaces so replacing all spaces with newlines is safe.
-PEM_RAW=$(grep -oP "${PEM_VAR}=\"\K[^\"]*" "$ENV_FILE" || true)
+# Extract PEM key value from .env.  lucos_creds normally flattens the key to
+# a single line with spaces, but some keys are stored with literal newlines.
+# This awk handles both formats by joining continuation lines with a space,
+# producing the same space-delimited form either way.
+PEM_RAW=$(awk -v key="${PEM_VAR}" '
+  $0 ~ ("^" key "=\"") {
+    line = substr($0, length(key) + 3)
+    if (substr(line, length(line), 1) == "\"") {
+      print substr(line, 1, length(line) - 1); exit
+    }
+    buf = line; next
+  }
+  buf != "" {
+    if (substr($0, length($0), 1) == "\"") {
+      print buf " " substr($0, 1, length($0) - 1); exit
+    }
+    buf = buf " " $0
+  }
+' "$ENV_FILE" | tr -d '\r')
 if [[ -z "$PEM_RAW" ]]; then
     echo "Error: ${PEM_VAR} not found in .env" >&2
     exit 1
 fi
-# lucos_creds flattens newlines to spaces; the header/footer contain spaces
-# too, so we parse them out, fix only the body, then reassemble.
+# base64 content never contains spaces, so converting spaces → newlines
+# reconstructs the original multi-line PEM body.  Parse header/footer out
+# separately since they also contain spaces.
 HEADER_LINE="-----BEGIN RSA PRIVATE KEY-----"
 FOOTER_LINE="-----END RSA PRIVATE KEY-----"
 BODY=$(echo "$PEM_RAW" | sed "s|$HEADER_LINE||;s|$FOOTER_LINE||" | tr ' ' '\n' | sed '/^$/d')
