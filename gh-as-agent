@@ -10,19 +10,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Parse --app flag (must be first argument; required — no default)
-if [[ "${1:-}" == "--app" ]]; then
-    APP_NAME="${2:?--app requires an argument}"
-    shift 2
-    TOKEN=$("$SCRIPT_DIR/get-token" --app "$APP_NAME")
-else
-    "$SCRIPT_DIR/get-token"  # will print the error and exit 1
-    exit 1  # belt and braces
-fi
-
 # Print gh-as-agent usage (not gh api usage) when --help is requested.
+# Must be checked before --app parsing so 'gh-as-agent --help' works without --app.
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-    cat >&2 <<'ENDHELP'
+    cat <<'ENDHELP'
 gh-as-agent — wrapper around 'gh api' that authenticates as a lucos GitHub App.
 
 Usage:
@@ -43,6 +34,16 @@ Notes:
   - All gh api flags (--method, --jq, -f, --paginate, etc.) are passed through directly.
 ENDHELP
     exit 0
+fi
+
+# Parse --app flag (must be first argument; required — no default)
+if [[ "${1:-}" == "--app" ]]; then
+    APP_NAME="${2:?--app requires an argument}"
+    shift 2
+    TOKEN=$("$SCRIPT_DIR/get-token" --app "$APP_NAME")
+else
+    "$SCRIPT_DIR/get-token"  # will print the error and exit 1
+    exit 1  # belt and braces
 fi
 
 # Pre-flight check: catch common mis-invocations before forwarding to gh api,
