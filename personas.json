@@ -78,5 +78,13 @@
     "app_id": "3032773",
     "installation_id": "114692216",
     "pem_var": "LUCOS_UX_PEM"
+  },
+  "career-advisor": {
+    "display_name": "LB Career Advisor",
+    "bot_name": "lb-career-advisor[bot]",
+    "bot_user_id": "286032098",
+    "app_id": "3769260",
+    "installation_id": "133731289",
+    "pem_var": "LB_CAREER_ADVISOR_PEM"
   }
 }
