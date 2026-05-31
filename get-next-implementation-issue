@@ -66,6 +66,7 @@ trap 'rm -f "$TMPFILE"' EXIT
 _TMPFILE="$TMPFILE" python3 << 'PYEOF'
 import json
 import os
+import pathlib
 import sys
 
 with open(os.environ["_TMPFILE"]) as f:
@@ -119,5 +120,11 @@ issue = ready_issues[0]
 print(f"owner:{issue['owner']}")
 print(f"#{issue['number']} {issue['title']}")
 print(issue["url"])
+
+# Write the hand-off file so /dispatch can read the URL+owner directly,
+# eliminating the model's URL transcription step (and the confabulation risk).
+# The file is gitignored — it is transient session state, not source control.
+handoff_path = pathlib.Path.home() / "sandboxes" / "lucos_agent" / ".next-issue"
+handoff_path.write_text(json.dumps({"url": issue["url"], "owner": issue["owner"]}))
 
 PYEOF
