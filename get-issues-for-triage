@@ -10,15 +10,18 @@
 # | Has status:blocked                       | Status = Blocked                       |
 # | Has owner:lucos-issue-manager            | Owner = lucos-issue-manager            |
 # | Has any owner:*/priority:*/status:*      | Has any Owner/Priority/Status set      |
-# | No workflow labels (untriaged)           | Not on board, OR Status = Needs Triage |
+# | No workflow labels (untriaged)           | Not on board, OR Status = Needs Analysis |
 #
 # Note: status:needs-design has no project field equivalent and is not queried
 #       (dropped per lucas42/lucos_claude_config#73 option d).
 # Note: the label audit-finding is exempt from this migration; not queried here.
 #
 # Inclusion criteria (any one is sufficient):
-#   1. Status = "Needs Triage" on the project board, OR not on the board at all
-#      (fallback) — issue has never been through a full triage pass.
+#   1. Status = "Needs Analysis" on the project board, OR not on the board at all
+#      (fallback). Needs Analysis is a persistent working column for both brand-new
+#      items and items routed to an agent for analysis/design — all are surfaced
+#      every pass so the coordinator can decide: agent on it / needs nudge / ready
+#      to transition. No owner or comment filtering applied for this status.
 #   2. Status ∈ {Ideation, Awaiting Decision} where the most recent comment is
 #      NOT from lucos-issue-manager[bot] — an owner agent has probably completed
 #      work and the issue needs a status transition.
@@ -60,7 +63,7 @@ NEEDS_REFINING_STATUSES = {"Ideation", "Awaiting Decision"}
 READY_STATUS        = "Ready"
 BLOCKED_STATUS      = "Blocked"
 DONE_STATUS         = "Done"
-NEEDS_TRIAGE_STATUS = "Needs Triage"
+NEEDS_ANALYSIS_STATUS = "Needs Analysis"
 ISSUE_MANAGER_OWNER = "lucos-issue-manager"
 
 WORKFLOW_LABEL_PREFIXES = ("owner:", "priority:", "status:")
@@ -251,8 +254,8 @@ for node in board_nodes:
     elif owner == ISSUE_MANAGER_OWNER:
         include = True  # Criterion 3: explicitly routed to issue manager
 
-    elif status == NEEDS_TRIAGE_STATUS:
-        include = True  # Criterion 1 (board): just added, needs initial triage
+    elif status == NEEDS_ANALYSIS_STATUS:
+        include = True  # Criterion 1 (board): Needs Analysis — surface unconditionally
 
     elif status in NEEDS_REFINING_STATUSES:
         # Criteria 2 / 2b: in-progress refinement — check for new activity
