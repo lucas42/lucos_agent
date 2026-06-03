@@ -1,0 +1,138 @@
+#!/bin/bash
+# commit-claude-main
+#
+# Commit one or more files from ~/.claude directly onto origin/main via an
+# isolated temporary git worktree.  Never touches the shared working tree —
+# does not checkout, stash, discard or modify any branch; just reads the files
+# you specify and pushes them as a fast-forward on main.
+#
+# Designed to solve the race condition where the coordinator needs to commit a
+# config change but the shared working tree is dirty with other agents'
+# uncommitted memory files (which would block a plain `git pull --ff-only`).
+#
+# Usage:
+#   commit-claude-main --app <persona> -m <message> <file> [<file>...]
+#
+#   --app    lucos GitHub App persona name (same as git-as-agent / gh-as-agent)
+#   -m       commit message (required)
+#   files    paths relative to ~/.claude/, e.g. "agents/CLAUDE.md"
+#            absolute paths under ~/.claude/ are also accepted.
+#
+# On success, prints the commit SHA to stdout and exits 0.
+# On "nothing to change", prints a note and exits 0.
+# On push failure (concurrent push between fetch and push), exits non-zero —
+# simply re-run the command to retry.
+
+set -euo pipefail
+
+CLAUDE_DIR="/home/lucas.linux/.claude"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PERSONAS_FILE="$SCRIPT_DIR/personas.json"
+
+# Use the lucos-agent SSH key (no passphrase; works in non-interactive contexts)
+export GIT_SSH_COMMAND="ssh -i /home/lucas.linux/.ssh/id_ed25519_lucos_agent \
+    -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=accept-new"
+
+# ---------- argument parsing --------------------------------------------------
+
+APP_NAME=""
+COMMIT_MSG=""
+FILES=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --app)
+            APP_NAME="${2:?--app requires an argument}"
+            shift 2
+            ;;
+        -m|--message)
+            COMMIT_MSG="${2:?-m requires an argument}"
+            shift 2
+            ;;
+        --help|-h)
+            sed -n '2,/^set -/p' "$0" | grep '^#' | sed 's/^# \?//'
+            exit 0
+            ;;
+        -*)
+            echo "Error: unknown flag '$1'" >&2
+            echo "Usage: commit-claude-main --app <persona> -m <message> <file> [<file>...]" >&2
+            exit 1
+            ;;
+        *)
+            FILES+=("$1")
+            shift
+            ;;
+    esac
+done
+
+[[ -n "$APP_NAME" ]]     || { echo "Error: --app is required" >&2; exit 1; }
+[[ -n "$COMMIT_MSG" ]]   || { echo "Error: -m is required" >&2; exit 1; }
+[[ ${#FILES[@]} -gt 0 ]] || { echo "Error: at least one file path is required" >&2; exit 1; }
+
+# ---------- identity lookup ---------------------------------------------------
+
+BOT_NAME=$(jq -r --arg app "$APP_NAME" '.[$app].bot_name // empty' "$PERSONAS_FILE")
+BOT_USER_ID=$(jq -r --arg app "$APP_NAME" '.[$app].bot_user_id // empty' "$PERSONAS_FILE")
+
+if [[ -z "$BOT_NAME" || -z "$BOT_USER_ID" ]]; then
+    echo "Error: unknown persona '$APP_NAME'" >&2
+    echo "Known personas: $(jq -r 'keys | join(", ")' "$PERSONAS_FILE")" >&2
+    exit 1
+fi
+
+BOT_EMAIL="${BOT_USER_ID}+${BOT_NAME}@users.noreply.github.com"
+
+# ---------- resolve & validate file paths ------------------------------------
+
+RESOLVED=()
+for f in "${FILES[@]}"; do
+    # Strip common absolute-path prefixes so callers can pass either form
+    f="${f#"$CLAUDE_DIR/"}"
+    f="${f#"$HOME/.claude/"}"
+    f="${f#./}"
+    if [[ ! -f "$CLAUDE_DIR/$f" ]]; then
+        echo "Error: file not found in ~/.claude/: $f" >&2
+        exit 1
+    fi
+    RESOLVED+=("$f")
+done
+
+# ---------- fetch & commit via throwaway worktree ----------------------------
+
+cd "$CLAUDE_DIR"
+git fetch --quiet origin main
+
+WORKTREE=$(mktemp -d)
+git worktree add --quiet "$WORKTREE" origin/main
+
+_cleanup() {
+    cd "$CLAUDE_DIR"
+    git worktree remove --force "$WORKTREE" 2>/dev/null || true
+}
+trap _cleanup EXIT
+
+# Copy each specified file into the worktree, preserving directory structure
+for f in "${RESOLVED[@]}"; do
+    mkdir -p "$(dirname "$WORKTREE/$f")"
+    cp "$CLAUDE_DIR/$f" "$WORKTREE/$f"
+done
+
+cd "$WORKTREE"
+git add -- "${RESOLVED[@]}"
+
+# If nothing changed, the files already match origin/main — no commit needed
+if git diff --quiet --cached; then
+    echo "Nothing to commit: all specified files already match origin/main."
+    exit 0
+fi
+
+git \
+    -c "user.name=${BOT_NAME}" \
+    -c "user.email=${BOT_EMAIL}" \
+    commit -m "$COMMIT_MSG"
+
+git push origin HEAD:main
+
+# Print the commit SHA so callers can reference it
+git rev-parse HEAD
