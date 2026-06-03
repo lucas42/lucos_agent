@@ -104,7 +104,7 @@ cd "$CLAUDE_DIR"
 git fetch --quiet origin main
 
 WORKTREE=$(mktemp -d)
-git worktree add --quiet "$WORKTREE" origin/main
+git worktree add --quiet --detach "$WORKTREE" origin/main
 
 _cleanup() {
     cd "$CLAUDE_DIR"
@@ -130,9 +130,10 @@ fi
 git \
     -c "user.name=${BOT_NAME}" \
     -c "user.email=${BOT_EMAIL}" \
-    commit -m "$COMMIT_MSG"
+    commit -m "$COMMIT_MSG" >&2
 
-git push origin HEAD:main
+git push origin HEAD:main >&2
 
-# Print the commit SHA so callers can reference it
+# Print the commit SHA to stdout — stderr carries all other output so the
+# caller can capture just the SHA cleanly with $(...).
 git rev-parse HEAD
