@@ -15,3 +15,12 @@ workflows:
           host-domain: avalon.s.l42.eu
           ssh-user: lucos-agent
           ssh-key-fingerprint: "f3:64:6b:31:47:5c:fd:1b:fd:c6:0a:54:bf:09:6d:d1"
+      - lucos/prune-images:
+          host-domain: xwing-v4.s.l42.eu
+          ssh-user: lucos-agent
+          ssh-key-fingerprint: "f3:64:6b:31:47:5c:fd:1b:fd:c6:0a:54:bf:09:6d:d1"
+      - lucos/prune-images:
+          host-domain: salvare-v4.s.l42.eu
+          ssh-port: 2202
+          ssh-user: lucos-agent
+          ssh-key-fingerprint: "f3:64:6b:31:47:5c:fd:1b:fd:c6:0a:54:bf:09:6d:d1"
