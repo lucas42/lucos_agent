@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Smoke test for arachne-mcp-proxy
+#
+# Verifies the proxy script in two scenarios:
+#   1. Missing LUCOS_ARCHITECT_AITHNE_CLIENT_SECRET → JSON-RPC error response, exit 1
+#   2. Valid credentials (from lucos_agent/.env) → MCP initialize succeeds
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PROXY="$SCRIPT_DIR/arachne-mcp-proxy"
+
+echo "=== arachne-mcp-proxy smoke test ==="
+
+# --- Test 1: Missing secret emits JSON-RPC error and exits non-zero ---
+echo "Test 1: missing secret → JSON-RPC error"
+
+output=$(LUCOS_ARCHITECT_AITHNE_CLIENT_SECRET="" "$PROXY" < /dev/null 2>/dev/null || true)
+
+if ! echo "$output" | python3 -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+assert data.get('error', {}).get('code') == -32001, f'Expected error code -32001, got: {data}'
+assert 'LUCOS_ARCHITECT_AITHNE_CLIENT_SECRET' in data.get('error', {}).get('message', ''), f'Expected helpful message, got: {data}'
+"; then
+    echo "FAIL: Test 1 — unexpected output: $output"
+    exit 1
+fi
+
+echo "  PASS"
+
+# --- Test 2: Valid credentials → MCP initialize succeeds ---
+echo "Test 2: valid credentials → MCP initialize"
+
+if [ ! -f "$SCRIPT_DIR/.env" ]; then
+    echo "  SKIP: .env not found (pull from lucos_creds to run full test)"
+    exit 0
+fi
+
+# Source credentials without polluting the current shell.
+# Unset any existing secret first to ensure we use the one from .env.
+unset LUCOS_ARCHITECT_AITHNE_CLIENT_SECRET 2>/dev/null || true
+
+INIT_MSG='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke-test","version":"1.0"}}}'
+
+init_output=$(
+    set -a
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/.env"
+    set +a
+    echo "$INIT_MSG" | "$PROXY" 2>/dev/null
+)
+
+if ! echo "$init_output" | python3 -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+result = data.get('result', {})
+assert result.get('serverInfo', {}).get('name') == 'lucos_arachne', f'Expected lucos_arachne, got: {data}'
+tools_cap = result.get('capabilities', {}).get('tools')
+assert tools_cap is not None, f'Expected tools capability, got: {data}'
+"; then
+    echo "FAIL: Test 2 — unexpected output: $init_output"
+    exit 1
+fi
+
+echo "  PASS"
+
+echo ""
+echo "=== All tests passed ==="

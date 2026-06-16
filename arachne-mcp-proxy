@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""
+arachne-mcp-proxy — stdio MCP proxy for arachne with aithne OAuth2 client-credentials auth.
+
+Bridges Claude Code's stdio MCP transport to arachne's HTTP MCP endpoint.
+Mints short-lived JWTs from aithne using the OAuth2 client-credentials grant
+(POST /oauth2/token, grant_type=client_credentials, scope=arachne:read).
+Tokens are cached and refreshed automatically; the 15-minute TTL is handled
+by refreshing 60 seconds before expiry.
+
+MCP stdio transport uses newline-delimited JSON (one JSON-RPC 2.0 message per
+line).  arachne runs FastMCP with stateless_http=True, so each POST returns a
+single JSON response (no SSE required for normal tool calls).  SSE responses
+are handled as a fallback.
+
+Usage — .mcp.json entry:
+  {
+    "arachne": {
+      "type": "stdio",
+      "command": "/home/lucas.linux/sandboxes/lucos_agent/arachne-mcp-proxy"
+    }
+  }
+
+Required env var (sourced from lucos_agent/development/.env via ~/.bashrc):
+  LUCOS_ARCHITECT_AITHNE_CLIENT_SECRET
+
+Optional env var (defaults to "lucos-architect"):
+  LUCOS_ARCHITECT_AITHNE_CLIENT_ID
+"""
+
+import json
+import os
+import sys
+import time
+
+import requests
+
+AITHNE_TOKEN_URL = "https://aithne.l42.eu/oauth2/token"
+ARACHNE_MCP_URL = "https://arachne.l42.eu/mcp"
+
+CLIENT_ID = os.environ.get("LUCOS_ARCHITECT_AITHNE_CLIENT_ID", "lucos-architect")
+CLIENT_SECRET = os.environ.get("LUCOS_ARCHITECT_AITHNE_CLIENT_SECRET", "")
+
+# Refresh the token this many seconds before it expires.
+# aithne issues 15-minute (900 s) tokens; refresh 60 s early to avoid
+# presenting an expiring token to arachne.
+_TOKEN_REFRESH_BUFFER_S = 60
+
+_token: str | None = None
+_token_expires_at: float = 0.0
+
+
+def _get_token() -> str:
+    """Return a valid aithne JWT, minting a new one if the cache is empty or stale."""
+    global _token, _token_expires_at
+    now = time.monotonic()
+    if _token is None or now >= _token_expires_at:
+        resp = requests.post(
+            AITHNE_TOKEN_URL,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "scope": "arachne:read",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        _token = payload["access_token"]
+        expires_in = payload.get("expires_in", 900)
+        _token_expires_at = now + expires_in - _TOKEN_REFRESH_BUFFER_S
+    return _token  # type: ignore[return-value]
+
+
+def _write(message: dict) -> None:
+    """Write a JSON-RPC message to stdout, newline-terminated."""
+    print(json.dumps(message, separators=(",", ":")), flush=True)
+
+
+def _error_response(msg_id, code: int, message: str) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": msg_id,
+        "error": {"code": code, "message": message},
+    }
+
+
+def main() -> None:
+    if not CLIENT_SECRET:
+        _write(
+            _error_response(
+                None,
+                -32001,
+                "LUCOS_ARCHITECT_AITHNE_CLIENT_SECRET not set — "
+                "pull lucos_agent/development/.env from lucos_creds",
+            )
+        )
+        sys.exit(1)
+
+    http_session = requests.Session()
+
+    for raw_line in sys.stdin:
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError as exc:
+            print(f"arachne-mcp-proxy: JSON parse error: {exc}", file=sys.stderr, flush=True)
+            continue
+
+        msg_id = msg.get("id")
+
+        try:
+            token = _get_token()
+        except Exception as exc:
+            print(f"arachne-mcp-proxy: token mint failed: {exc}", file=sys.stderr, flush=True)
+            if msg_id is not None:
+                _write(_error_response(msg_id, -32001, f"aithne token mint failed: {exc}"))
+            continue
+
+        try:
+            resp = http_session.post(
+                ARACHNE_MCP_URL,
+                json=msg,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                },
+                stream=True,
+                timeout=60,
+            )
+        except Exception as exc:
+            print(f"arachne-mcp-proxy: HTTP request failed: {exc}", file=sys.stderr, flush=True)
+            if msg_id is not None:
+                _write(_error_response(msg_id, -32001, f"HTTP request failed: {exc}"))
+            continue
+
+        content_type = resp.headers.get("content-type", "")
+
+        if "text/event-stream" in content_type:
+            # SSE stream: each "data: <json>" line is a separate JSON-RPC message.
+            # arachne uses stateless_http=True so SSE is rarely used, but handle
+            # it defensively in case the server chooses streaming for a response.
+            for sse_line in resp.iter_lines():
+                if isinstance(sse_line, bytes):
+                    sse_line = sse_line.decode("utf-8")
+                if not sse_line or not sse_line.startswith("data: "):
+                    continue
+                data_str = sse_line[6:]
+                if data_str == "[DONE]":
+                    break
+                try:
+                    _write(json.loads(data_str))
+                except json.JSONDecodeError:
+                    pass
+        else:
+            # Standard JSON response — the expected path for stateless_http=True.
+            try:
+                _write(resp.json())
+            except Exception as exc:
+                print(
+                    f"arachne-mcp-proxy: response parse error ({resp.status_code}): {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                if msg_id is not None:
+                    _write(
+                        _error_response(
+                            msg_id,
+                            -32001,
+                            f"arachne response parse error (HTTP {resp.status_code}): {exc}",
+                        )
+                    )
+
+
+if __name__ == "__main__":
+    main()
