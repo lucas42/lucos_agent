@@ -157,6 +157,29 @@ def main() -> None:
                     _write(json.loads(data_str))
                 except json.JSONDecodeError:
                     pass
+        elif resp.status_code == 401:
+            # arachne rejected the token — flush the cache so the next request
+            # mints a fresh one rather than retrying with the same bad token for
+            # up to 15 minutes.
+            global _token
+            _token = None
+            print(
+                "arachne-mcp-proxy: 401 from arachne — token cache flushed",
+                file=sys.stderr,
+                flush=True,
+            )
+            if msg_id is not None:
+                _write(_error_response(msg_id, -32001, "arachne returned 401 — stale token flushed, retry"))
+        elif resp.status_code >= 400:
+            # Other HTTP error — emit a proper JSON-RPC error rather than
+            # forwarding an opaque HTTP body that Claude Code can't interpret.
+            print(
+                f"arachne-mcp-proxy: HTTP {resp.status_code} from arachne",
+                file=sys.stderr,
+                flush=True,
+            )
+            if msg_id is not None:
+                _write(_error_response(msg_id, -32001, f"arachne returned HTTP {resp.status_code}"))
         else:
             # Standard JSON response — the expected path for stateless_http=True.
             try:
