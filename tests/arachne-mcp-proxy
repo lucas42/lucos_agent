@@ -65,5 +65,43 @@ fi
 
 echo "  PASS"
 
+# --- Test 3: Notification (no id) with 2xx response → no output, no stderr parse error ---
+echo "Test 3: notifications/initialized → no output, no parse error in stderr"
+
+NOTIF_MSG='{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}'
+
+# Pipe initialize then the notification; capture stdout and stderr separately.
+# The proxy should output exactly one line (the initialize response) and log
+# no "response parse error" to stderr.
+{
+    echo "$INIT_MSG"
+    echo "$NOTIF_MSG"
+} | {
+    set -a
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/.env"
+    set +a
+    "$PROXY"
+} > /tmp/arachne-proxy-test3-out.txt 2> /tmp/arachne-proxy-test3-err.txt || true
+
+output_lines=$(wc -l < /tmp/arachne-proxy-test3-out.txt)
+stderr_content=$(cat /tmp/arachne-proxy-test3-err.txt)
+
+if [ "$output_lines" -ne 1 ]; then
+    echo "FAIL: Test 3 — expected 1 output line (initialize response), got $output_lines"
+    echo "stdout: $(cat /tmp/arachne-proxy-test3-out.txt)"
+    exit 1
+fi
+
+if echo "$stderr_content" | grep -q "response parse error"; then
+    echo "FAIL: Test 3 — unexpected 'response parse error' in stderr:"
+    echo "$stderr_content"
+    exit 1
+fi
+
+rm -f /tmp/arachne-proxy-test3-out.txt /tmp/arachne-proxy-test3-err.txt
+
+echo "  PASS"
+
 echo ""
 echo "=== All tests passed ==="
