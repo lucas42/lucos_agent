@@ -12,11 +12,20 @@
 #
 # Usage:
 #   commit-claude-main --app <persona> -m <message> <file> [<file>...]
+#   commit-claude-main --app <persona> -m <message> --delete <file> [--delete <file>...]
+#   (the two forms combine freely — add/update some files, delete others, in one commit)
 #
-#   --app    lucos GitHub App persona name (same as git-as-agent / gh-as-agent)
-#   -m       commit message (required)
-#   files    paths relative to ~/.claude/, e.g. "agents/CLAUDE.md"
-#            absolute paths under ~/.claude/ are also accepted.
+#   --app      lucos GitHub App persona name (same as git-as-agent / gh-as-agent)
+#   -m         commit message (required)
+#   files      paths relative to ~/.claude/, e.g. "agents/CLAUDE.md" — added/updated
+#              from the live working tree. Must exist on disk. Absolute paths under
+#              ~/.claude/ are also accepted.
+#   --delete   path (relative or absolute, same rules as above) to remove from
+#              origin/main. Does NOT need to exist on disk — that's the point: it
+#              covers a file that's already gone locally (or was never meant to be
+#              there — e.g. a stray temp file that got committed by accident) but
+#              is still tracked on origin/main. Repeatable. A path not present on
+#              origin/main is a no-op note, not an error.
 #
 # On success, prints the commit SHA to stdout and exits 0.
 # On "nothing to change", prints a note and exits 0.
@@ -39,6 +48,7 @@ export GIT_SSH_COMMAND="ssh -i /home/lucas.linux/.ssh/id_ed25519_lucos_agent \
 APP_NAME=""
 COMMIT_MSG=""
 FILES=()
+DELETES=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -50,13 +60,17 @@ while [[ $# -gt 0 ]]; do
             COMMIT_MSG="${2:?-m requires an argument}"
             shift 2
             ;;
+        --delete)
+            DELETES+=("${2:?--delete requires an argument}")
+            shift 2
+            ;;
         --help|-h)
             sed -n '2,/^set -/p' "$0" | grep '^#' | sed 's/^# \?//'
             exit 0
             ;;
         -*)
             echo "Error: unknown flag '$1'" >&2
-            echo "Usage: commit-claude-main --app <persona> -m <message> <file> [<file>...]" >&2
+            echo "Usage: commit-claude-main --app <persona> -m <message> [<file>...] [--delete <file>]..." >&2
             exit 1
             ;;
         *)
@@ -66,9 +80,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-[[ -n "$APP_NAME" ]]     || { echo "Error: --app is required" >&2; exit 1; }
-[[ -n "$COMMIT_MSG" ]]   || { echo "Error: -m is required" >&2; exit 1; }
-[[ ${#FILES[@]} -gt 0 ]] || { echo "Error: at least one file path is required" >&2; exit 1; }
+[[ -n "$APP_NAME" ]]   || { echo "Error: --app is required" >&2; exit 1; }
+[[ -n "$COMMIT_MSG" ]] || { echo "Error: -m is required" >&2; exit 1; }
+[[ ${#FILES[@]} -gt 0 || ${#DELETES[@]} -gt 0 ]] || {
+    echo "Error: at least one file path (to add/update) or --delete <path> (to remove) is required" >&2
+    exit 1
+}
 
 # ---------- identity lookup ---------------------------------------------------
 
@@ -86,7 +103,8 @@ BOT_EMAIL="${BOT_USER_ID}+${BOT_NAME}@users.noreply.github.com"
 # ---------- resolve & validate file paths ------------------------------------
 
 RESOLVED=()
-for f in "${FILES[@]}"; do
+for f in "${FILES[@]:-}"; do
+    [[ -z "$f" ]] && continue
     # Strip common absolute-path prefixes so callers can pass either form
     f="${f#"$CLAUDE_DIR/"}"
     f="${f#"$HOME/.claude/"}"
@@ -96,6 +114,19 @@ for f in "${FILES[@]}"; do
         exit 1
     fi
     RESOLVED+=("$f")
+done
+
+# --delete paths deliberately skip the disk-existence check above — deleting a
+# file that's already gone locally (or was accidentally committed and never
+# should have been) is exactly the use case. Whether it's actually present on
+# origin/main is checked later, once we're looking at the worktree copy.
+RESOLVED_DELETES=()
+for f in "${DELETES[@]:-}"; do
+    [[ -z "$f" ]] && continue
+    f="${f#"$CLAUDE_DIR/"}"
+    f="${f#"$HOME/.claude/"}"
+    f="${f#./}"
+    RESOLVED_DELETES+=("$f")
 done
 
 # ---------- fetch & commit via throwaway worktree ----------------------------
@@ -113,17 +144,32 @@ _cleanup() {
 trap _cleanup EXIT
 
 # Copy each specified file into the worktree, preserving directory structure
-for f in "${RESOLVED[@]}"; do
+for f in "${RESOLVED[@]:-}"; do
+    [[ -z "$f" ]] && continue
     mkdir -p "$(dirname "$WORKTREE/$f")"
     cp "$CLAUDE_DIR/$f" "$WORKTREE/$f"
 done
 
 cd "$WORKTREE"
-git add -- "${RESOLVED[@]}"
+if [[ ${#RESOLVED[@]} -gt 0 ]]; then
+    git add -- "${RESOLVED[@]}"
+fi
 
-# If nothing changed, the files already match origin/main — no commit needed
+# Remove each --delete path from the worktree, if it's there to remove. A path
+# origin/main doesn't have is reported, not treated as an error — the caller
+# may be idempotently re-running, or may be wrong about what's tracked.
+for f in "${RESOLVED_DELETES[@]:-}"; do
+    [[ -z "$f" ]] && continue
+    if [[ -f "$WORKTREE/$f" ]]; then
+        git rm --quiet -- "$f"
+    else
+        echo "Note: '$f' not present on origin/main — nothing to delete." >&2
+    fi
+done
+
+# If nothing changed, the result already matches origin/main — no commit needed
 if git diff --quiet --cached; then
-    echo "Nothing to commit: all specified files already match origin/main."
+    echo "Nothing to commit: result already matches origin/main."
     exit 0
 fi
 
