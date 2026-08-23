@@ -3,7 +3,31 @@ version: 2.1
 orbs:
   lucos: lucos/deploy@0
 
+jobs:
+  # Runs the tests/ smoke tests that don't depend on this machine's live
+  # production state (session history, host SSH access, etc.) — see
+  # lucas42/lucos_agent#76 for tests/verify-teammate-quote, excluded for now
+  # because its fixture is real production session data that can't exist in
+  # a fresh CircleCI checkout.
+  test:
+    docker:
+      - image: cimg/python:3.14
+    steps:
+      - checkout
+      - run:
+          name: Install dependencies
+          command: pip install requests
+      - run:
+          name: Run tests/arachne-mcp-proxy
+          command: tests/arachne-mcp-proxy
+
 workflows:
+  # Runs the tests/ suite on every push, on all branches — not gated to main,
+  # so a PR shows the result before merge.
+  test:
+    jobs:
+      - test
+
   # Runs daily at 03:00 UTC — well outside the 07:10 UTC Dependabot merge
   # window — to safely prune old tagged images that accumulate over time.
   # The -a flag is only safe outside concurrent deploys (see lucos_deploy_orb#54).
