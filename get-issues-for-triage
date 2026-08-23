@@ -26,8 +26,10 @@
 #      NOT from lucos-issue-manager[bot] — an owner agent has probably completed
 #      work and the issue needs a status transition.
 #   2b. Status ∈ {Ideation, Awaiting Decision} where the most recent comment IS
-#       from lucos-issue-manager[bot] but has reactions from a non-bot user —
-#       e.g. a +1 on a proposal counts as new activity that needs re-triage.
+#       from lucos-issue-manager[bot] but a non-bot user has reacted to a
+#       comment OR to the issue body itself — e.g. a +1 on a proposal counts
+#       as new activity that needs re-triage. The body is the common case for
+#       agent-filed design tickets, where the body IS the proposal.
 #   3. Owner = lucos-issue-manager — explicitly routed back to the issue manager.
 #   4. Has Owner or Priority set on the board but Status is null — inconsistent
 #      state, probably left by a failed or incomplete triage action.
@@ -110,6 +112,16 @@ def fetch_reactions(repo, comment_id):
     result = gh_rest(f"/repos/{repo}/issues/comments/{comment_id}/reactions")
     return result if isinstance(result, list) else []
 
+def fetch_issue_reactions(repo, number):
+    result = gh_rest(f"/repos/{repo}/issues/{number}/reactions")
+    return result if isinstance(result, list) else []
+
+def has_non_bot_reaction(reactions):
+    return any(
+        not r.get("user", {}).get("login", "").endswith("[bot]")
+        for r in reactions
+    )
+
 # ── Project board query (paginated) ───────────────────────────────────────────
 
 BOARD_QUERY = """{
@@ -126,6 +138,7 @@ BOARD_QUERY = """{
               repository { nameWithOwner }
               labels(first: 20) { nodes { name } }
               comments { totalCount }
+              reactions { totalCount }
             }
           }
           fieldValues(first: 10) {
@@ -170,14 +183,16 @@ def get_fields(node):
 
 # ── Comment analysis helpers ───────────────────────────────────────────────────
 
-def should_include_refining(repo, number, comment_count):
+def should_include_refining(repo, number, comment_count, issue_reaction_count):
     """Criteria 2 / 2b: surface if there is activity the issue manager should see.
 
     Returns True when:
     - No comments exist (needs initial triage pass), OR
     - Last commenter is not lucos-issue-manager[bot] (someone else acted), OR
     - Last commenter IS lucos-issue-manager[bot] but a non-bot user has reacted
-      to at least one comment (e.g. a +1 on a proposal).
+      to at least one comment, OR to the issue body itself (e.g. a +1 on a
+      proposal — the common case for agent-filed design tickets, where the
+      body IS the proposal and there's no comment to react to).
     """
     if comment_count == 0:
         return True  # Never had a triage comment — needs initial pass
@@ -190,14 +205,14 @@ def should_include_refining(repo, number, comment_count):
     if last_commenter != "lucos-issue-manager[bot]":
         return True  # Someone else acted last — needs re-triage
 
-    # Last comment is ours; check for non-bot reactions on any comment
+    # Last comment is ours; check for non-bot reactions on the issue body
+    # itself (separate endpoint from comment reactions), then on any comment.
+    if issue_reaction_count > 0 and has_non_bot_reaction(fetch_issue_reactions(repo, number)):
+        return True
+
     for c in comments:
         if c.get("reactions", {}).get("total_count", 0) > 0:
-            reactions = fetch_reactions(repo, c["id"])
-            if any(
-                not r.get("user", {}).get("login", "").endswith("[bot]")
-                for r in reactions
-            ):
+            if has_non_bot_reaction(fetch_reactions(repo, c["id"])):
                 return True
 
     return False
@@ -244,6 +259,7 @@ for node in board_nodes:
     repo          = content["repository"]["nameWithOwner"]
     number        = content["number"]
     comment_count = content.get("comments", {}).get("totalCount", 0)
+    reaction_count = content.get("reactions", {}).get("totalCount", 0)
     labels        = [l["name"] for l in content.get("labels", {}).get("nodes", [])]
 
     include = False
@@ -259,7 +275,7 @@ for node in board_nodes:
 
     elif status in NEEDS_REFINING_STATUSES:
         # Criteria 2 / 2b: in-progress refinement — check for new activity
-        include = should_include_refining(repo, number, comment_count)
+        include = should_include_refining(repo, number, comment_count, reaction_count)
 
     elif status == READY_STATUS:
         # Criterion 5: ready for dispatch — surface if lucas42 has revised scope
