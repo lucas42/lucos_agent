@@ -5,10 +5,10 @@ orbs:
 
 jobs:
   # Runs the tests/ smoke tests that don't depend on this machine's live
-  # production state (session history, host SSH access, etc.) — see
-  # lucas42/lucos_agent#76 for tests/verify-teammate-quote, excluded for now
-  # because its fixture is real production session data that can't exist in
-  # a fresh CircleCI checkout.
+  # production state (host SSH access, etc.). tests/verify-teammate-quote
+  # uses a synthetic fixture (tests/fixtures/verify-teammate-quote/) rather
+  # than real session history, so it's portable to a fresh checkout — see
+  # lucas42/lucos_agent#76.
   test:
     docker:
       - image: cimg/python:3.14
@@ -20,6 +20,9 @@ jobs:
       - run:
           name: Run tests/arachne-mcp-proxy
           command: tests/arachne-mcp-proxy
+      - run:
+          name: Run tests/verify-teammate-quote
+          command: tests/verify-teammate-quote
 
 workflows:
   # Runs the tests/ suite on every push, on all branches — not gated to main,

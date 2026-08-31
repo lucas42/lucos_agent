@@ -79,7 +79,7 @@ if [[ "$SCOPE" != "today" && "$SCOPE" != "all" ]]; then
     usage
 fi
 
-PROJECTS_DIR="${HOME}/.claude/projects/-home-lucas-linux-sandboxes"
+PROJECTS_DIR="${PROJECTS_DIR:-${HOME}/.claude/projects/-home-lucas-linux-sandboxes}"
 
 # Pass arguments to Python via environment variables to avoid quoting hazards
 export _VTQ_SENDER="$SENDER"
