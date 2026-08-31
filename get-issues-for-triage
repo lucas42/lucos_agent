@@ -30,7 +30,14 @@
 #       comment OR to the issue body itself — e.g. a +1 on a proposal counts
 #       as new activity that needs re-triage. The body is the common case for
 #       agent-filed design tickets, where the body IS the proposal.
-#   3. Owner = lucos-issue-manager — explicitly routed back to the issue manager.
+#   3. Owner = lucos-issue-manager AND Status != Ready — explicitly routed back
+#      to the issue manager while still in refinement (Ideation, Needs Analysis,
+#      Awaiting Decision). A coordinator-owned issue at Status = Ready is fully
+#      triaged and falls through to criterion 5 instead, same as any other
+#      owner's Ready issue — get-next-implementation-issue is already the
+#      position-ordered discovery surface for Ready work regardless of owner,
+#      so unconditional resurfacing here would only duplicate it without the
+#      ordering (lucas42/lucos_agent#79).
 #   4. Has Owner or Priority set on the board but Status is null — inconsistent
 #      state, probably left by a failed or incomplete triage action.
 #   5. Status = Ready where lucas42 has commented more recently than the most
@@ -267,8 +274,8 @@ for node in board_nodes:
     if status in (DONE_STATUS, BLOCKED_STATUS):
         pass  # Never surface Done or Blocked issues
 
-    elif owner == ISSUE_MANAGER_OWNER:
-        include = True  # Criterion 3: explicitly routed to issue manager
+    elif owner == ISSUE_MANAGER_OWNER and status != READY_STATUS:
+        include = True  # Criterion 3: explicitly routed to issue manager, still in refinement
 
     elif status == NEEDS_ANALYSIS_STATUS:
         include = True  # Criterion 1 (board): Needs Analysis — surface unconditionally
