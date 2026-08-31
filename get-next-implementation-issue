@@ -8,7 +8,7 @@
 # Usage: get-next-implementation-issue
 #
 # Filtering:
-#   - Only items with Status = "Ready" (option ID: bfb298e3)
+#   - Only items with Status = "Ready"
 #   - Only items with an Owner (board field, or owner:* issue label as fallback)
 #   - Only Issue content (not pull requests or draft issues)
 #
@@ -31,15 +31,23 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Fetch all project items in one query (project has <100 items, no pagination needed)
-TMPFILE=$(mktemp)
-trap 'rm -f "$TMPFILE"' EXIT
+_GH_PROJECTS="$SCRIPT_DIR/gh-projects" python3 << 'PYEOF'
+import json
+import os
+import pathlib
+import subprocess
+import sys
 
-"$SCRIPT_DIR/gh-projects" graphql -f query='
-{
+GH_PROJECTS = os.environ["_GH_PROJECTS"]
+
+# orderBy is applied server-side by GitHub on every page, so board position
+# order is preserved across the full paginated result — not just within a
+# single page.
+QUERY = """{
   node(id: "PVT_kwHOAAaLL84BRh5d") {
     ... on ProjectV2 {
-      items(first: 100, orderBy: {field: POSITION, direction: ASC}) {
+      items(first: 100, orderBy: {field: POSITION, direction: ASC}%s) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           content {
             ... on Issue {
@@ -61,17 +69,25 @@ trap 'rm -f "$TMPFILE"' EXIT
       }
     }
   }
-}' > "$TMPFILE"
+}"""
 
-_TMPFILE="$TMPFILE" python3 << 'PYEOF'
-import json
-import os
-import pathlib
-import sys
-
-with open(os.environ["_TMPFILE"]) as f:
-    data = json.load(f)
-nodes = data["data"]["node"]["items"]["nodes"]
+def fetch_all_items():
+    """Fetch every project item, paginating until exhausted."""
+    all_nodes = []
+    cursor = None
+    while True:
+        after = f', after: "{cursor}"' if cursor else ""
+        r = subprocess.run(
+            [GH_PROJECTS, "graphql", "-f", f"query={QUERY % after}"],
+            capture_output=True, text=True, check=True,
+        )
+        data = json.loads(r.stdout)
+        items = data["data"]["node"]["items"]
+        all_nodes.extend(items["nodes"])
+        if not items["pageInfo"]["hasNextPage"]:
+            break
+        cursor = items["pageInfo"]["endCursor"]
+    return all_nodes
 
 def get_field_values(node):
     """Return a dict of field name -> option name for single-select fields."""
@@ -81,8 +97,11 @@ def get_field_values(node):
             result[fv["field"]["name"]] = fv["name"]
     return result
 
-# Items are returned in board position order (ASC) by the API query.
-# We preserve that order — the first matching item is the highest priority.
+nodes = fetch_all_items()
+
+# Items are returned in board position order (ASC) by the API query, and that
+# order is preserved across pages — we keep it as-is: the first matching item
+# is the highest priority.
 ready_issues = []
 for node in nodes:
     content = node.get("content")
