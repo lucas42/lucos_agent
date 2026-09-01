@@ -24,19 +24,6 @@ jobs:
           name: Run tests/verify-teammate-quote
           command: tests/verify-teammate-quote
 
-  # Temporary, zero-side-effect diagnostic for lucas42/lucos_agent#72 — prints
-  # the actual value of << pipeline.trigger.type >> for whatever triggered
-  # this pipeline, so the "schedule" vs "scheduled_pipeline" fix above can be
-  # confirmed against a real scheduled firing rather than assumed from docs.
-  # Remove once confirmed against a real 03:00 UTC run.
-  debug-trigger-type:
-    docker:
-      - image: cimg/base:current
-    steps:
-      - run:
-          name: Print pipeline.trigger.type
-          command: echo "trigger.type=<< pipeline.trigger.type >>"
-
 workflows:
   # Runs the tests/ suite on every push, on all branches — not gated to main,
   # so a PR shows the result before merge.
@@ -44,27 +31,10 @@ workflows:
     jobs:
       - test
 
-  # No `when` gate — runs on every pipeline regardless of trigger type, so it
-  # can observe the literal value for webhook/api pushes immediately and for
-  # a real schedule trigger at the next 03:00 UTC. See debug-trigger-type job.
-  debug-trigger-type:
-    jobs:
-      - debug-trigger-type
-
   # Runs daily at 03:00 UTC — well outside the 07:10 UTC Dependabot merge
   # window — to safely prune old tagged images that accumulate over time.
   # The -a flag is only safe outside concurrent deploys (see lucos_deploy_orb#54).
-  #
-  # The trigger-type literal below is "schedule", not "scheduled_pipeline" —
-  # that was the actual bug (lucas42/lucos_agent#72): CircleCI's REST API
-  # reports a scheduled pipeline's trigger.type as "scheduled_pipeline", but
-  # the config-compile-time << pipeline.trigger.type >> value uses "schedule"
-  # for the same thing. Comparing against the REST-API string here made this
-  # `when` silently evaluate false on every single scheduled firing since the
-  # workflow was added — no error, just an empty compiled workflow. Verified
-  # against a live scheduled run's actual << pipeline.trigger.type >> value
-  # via debug-trigger-type below before shipping this fix, rather than
-  # trusting documentation alone.
+  # Trigger-type literal is "schedule", not "scheduled_pipeline" (#72).
   prune-images:
     when:
       equal: [ schedule, << pipeline.trigger.type >> ]
