@@ -23,6 +23,9 @@ jobs:
       - run:
           name: Run tests/verify-teammate-quote
           command: tests/verify-teammate-quote
+      - run:
+          name: Run tests/commit-msg-hook
+          command: tests/commit-msg-hook/run-tests.sh
 
 workflows:
   # Runs the tests/ suite on every push, on all branches — not gated to main,
