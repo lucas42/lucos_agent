@@ -8,7 +8,7 @@ Actions taken with these credentials appear as bot accounts in the GitHub UI (e.
 
 - **`get-token`** — shell script that generates a short-lived GitHub installation access token (valid 1 hour), printed to stdout
 - **`gh-as-agent`** — wrapper around `gh api` that handles token generation internally; use this instead of calling `gh api` directly
-- **`git-hooks/commit-msg`** — strips Claude-attributed `Co-Authored-By` trailers from every commit message (warns on stderr, never blocks). Enforced via a global hooks path rather than in `git-as-agent`/`commit-claude-main`, because a hook sees the final message however it arrived (`-m`, `-F`, amend, cherry-pick, ...). Install with `git config --global core.hooksPath ~/sandboxes/lucos_agent/git-hooks` (also set by `lucos_agent_coding_sandbox`'s `lima.yaml`). Limitations: it replaces per-repo `.git/hooks/`, so `pre-commit install` will error in a repo until that's reconciled; and it fails open if the path is missing.
+- **`git-hooks/commit-msg`** — strips `Co-Authored-By` trailers using the harness's `noreply@anthropic.com` address from every commit message (warns on stderr, never blocks). Enforced via a global hooks path rather than in `git-as-agent`/`commit-claude-main`, because a hook sees the final message however it arrived (`-m`, `-F`, amend, cherry-pick, ...). Install with `git config --global core.hooksPath ~/sandboxes/lucos_agent/git-hooks` (also set by `lucos_agent_coding_sandbox`'s `lima.yaml`). Limitations: it replaces per-repo `.git/hooks/`, so `pre-commit install` will error in a repo until that's reconciled; and it fails open if the path is missing.
 
 ## Usage
 

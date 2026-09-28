@@ -14,7 +14,7 @@ check() { # name, expected-substring-present(0/1), pattern
 git commit -q --allow-empty -m "a" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"; check "-m trailer stripped" 0 'co-authored'
 printf 'subject\n\nbody\n\nCo-authored-by: Claude <noreply@anthropic.com>\n' | git commit -q --allow-empty -F -; check "-F - lowercase stripped" 0 'co-authored'
 git commit -q --allow-empty -m "x" -m "Co-Authored-By: Jane <jane@example.com>"; check "human co-author kept" 1 'jane@example.com'
+git commit -q --allow-empty -m "m" -m "Co-Authored-By: Claude Monet <monet@example.com>"; check "human named Claude kept" 1 'monet@example.com'
 git commit -q --allow-empty -m "y" -m "Co-Authored-By: Claude <noreply@anthropic.com>"; git commit -q --amend --allow-empty -m "z" -m "Co-Authored-By: Claude <noreply@anthropic.com>"; check "--amend stripped" 0 'co-authored'
 git commit -q --allow-empty -m "body kept" -m "real body"; check "clean message untouched" 1 'real body'
-[[ -z "$(git log -1 --format=%B | tail -c2 | tr -d '\n')" ]] || true
 exit $fail

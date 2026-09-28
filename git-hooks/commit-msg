@@ -1,12 +1,12 @@
 #!/bin/bash
-# commit-msg hook: strip Claude-attributed Co-Authored-By trailers.
+# commit-msg hook: strip Co-Authored-By trailers with the harness's noreply@anthropic.com address.
 # The Claude Code harness injects a reminder to add one; the global CLAUDE.md forbids it.
 # Enforced here (not in the wrappers) because this sees the final message however it arrived.
 # Human co-authors are left alone. Never blocks: warns on stderr and exits 0.
 # Installed via `git config --global core.hooksPath` (see README).
 set -u
 MSG_FILE="${1:?commit message file required}"
-PATTERN='^co-authored-by:.*(claude|anthropic)'
+PATTERN='^co-authored-by:.*<noreply@anthropic\.com>'
 
 if grep -qiE "$PATTERN" "$MSG_FILE"; then
     TMP="$(mktemp)"
