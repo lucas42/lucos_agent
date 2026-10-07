@@ -1,0 +1,74 @@
+#!/usr/bin/env -S python3 -I
+"""creds-shape — inspect the shape of a lucos_creds .env file without printing any value.
+
+Usage: creds-shape <system> [environment]     (environment defaults to development)
+       creds-shape --file <path>              (inspect a local file; used by tests)
+
+Per variable prints only: name, value length, line count, empty flag, and for PEM
+values the PEM type and public-key SHA256 fingerprint (GitHub's format).
+Safety comes from limiting what is printed, not from the parser being right.
+"""
+import base64, hashlib, os, re, signal, subprocess, sys, tempfile
+
+ENTRY = re.compile(r'^([^=\n]*)=("(?:[^"\\]|\\.)*"|\'[^\']*\'|[^\n]*)', re.M | re.S)
+NAME = re.compile(r'[A-Z_][A-Z0-9_]*')
+PEM_TYPE = re.compile(r'-----BEGIN ([A-Z ]+)-----')
+SAFE_ARG = re.compile(r'[A-Za-z0-9_.-]+')
+
+
+def fingerprint(value):
+    for candidate in (value, value.replace('\\n', '\n')):
+        p = subprocess.run(['openssl', 'pkey', '-pubout', '-outform', 'DER'],
+                           input=candidate.encode(), capture_output=True)
+        if p.returncode == 0 and p.stdout:
+            return 'SHA256:' + base64.b64encode(hashlib.sha256(p.stdout).digest()).decode()
+    return 'unavailable'
+
+
+def shape(text):
+    rows, covered = [], 0
+    for m in ENTRY.finditer(text):
+        raw = m.group(2)
+        value = raw[1:-1] if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in '"\'' else raw
+        covered += m.group(0).count('\n') + 1
+        name = m.group(1) if NAME.fullmatch(m.group(1)) else '<unparseable entry>'
+        row = f'{name}  len={len(value)} lines={value.count(chr(10)) + 1} empty={str(value == "").lower()}'
+        pem = PEM_TYPE.search(value)
+        if pem:
+            row += f' pem_type="{pem.group(1)}" fingerprint={fingerprint(value)}'
+        rows.append(row)
+    total = text.count('\n') + (0 if text.endswith('\n') or not text else 1)
+    return rows, total, covered
+
+
+def main(argv):
+    if len(argv) == 2 and argv[0] == '--file':
+        with open(argv[1], encoding='utf-8', errors='replace') as f:
+            text = f.read()
+    elif argv and not argv[0].startswith('-') and len(argv) <= 2 and all(SAFE_ARG.fullmatch(a) for a in argv):
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+        system, env = argv[0], (argv[1] if len(argv) > 1 else 'development')
+        fd, path = tempfile.mkstemp(prefix='creds-shape.')
+        os.close(fd)
+        try:
+            r = subprocess.run(['scp', '-q', '-P', '2202', f'creds.l42.eu:{system}/{env}/.env', path])
+            if r.returncode != 0:
+                print(f'creds-shape: scp failed (exit {r.returncode})', file=sys.stderr)
+                return 1
+            with open(path, encoding='utf-8', errors='replace') as f:
+                text = f.read()
+        finally:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+    else:
+        print(__doc__, file=sys.stderr)
+        return 2
+    rows, total, covered = shape(text)
+    print('\n'.join(rows))
+    print(f'entries={len(rows)} total_lines={total} lines_in_entries={covered}')
+    return 0
+
+
+sys.exit(main(sys.argv[1:]))

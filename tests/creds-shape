@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Tests for creds-shape: no value material in output, PEM fingerprint correct,
+# temp file removed on success and failure. Run from the lucos_agent repo root.
+# Fixture keys are generated at runtime so no key material is committed.
+set -uo pipefail
+
+SCRIPT="$(cd "$(dirname "$0")/.." && pwd)/creds-shape"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+PASS=0; FAIL=0
+ok()   { echo "PASS: $1"; PASS=$((PASS+1)); }
+fail() { echo "FAIL: $1"; FAIL=$((FAIL+1)); }
+
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out "$WORK/key.pem" 2>/dev/null
+WANT_FP="SHA256:$(openssl pkey -in "$WORK/key.pem" -pubout -outform DER | openssl dgst -sha256 -binary | base64 -w0)"
+{
+  echo 'PLAIN=hunter2-secret'
+  echo 'EMPTY='
+  echo "SINGLE='single quoted secret'"
+  printf 'PEM_KEY="'; cat "$WORK/key.pem" | sed '$ s/$/"/'
+  echo 'lowercase=leaky-lowercase-value'
+  echo 'a junk line with a stray secret'
+} > "$WORK/fixture.env"
+
+OUT="$(python3 -I "$SCRIPT" --file "$WORK/fixture.env")"; RC=$?
+[ $RC -eq 0 ] && ok "runs under python3 -I" || fail "exit $RC under python3 -I"
+
+for want in 'PLAIN  len=14 lines=1 empty=false' 'EMPTY  len=0 lines=1 empty=true' \
+            'SINGLE  len=20 lines=1 empty=false' 'pem_type="PRIVATE KEY"' "fingerprint=$WANT_FP" \
+            '<unparseable entry>' 'entries=5 total_lines=' ; do
+  grep -qF -- "$want" <<<"$OUT" && ok "output contains: $want" || { fail "missing: $want"; echo "$OUT"; }
+done
+
+LEAK=0
+while IFS= read -r line; do
+  [ -n "$line" ] && grep -qF -- "$line" <<<"$OUT" && { LEAK=1; echo "leaked key line: $line"; }
+done < "$WORK/key.pem"
+for secret in hunter2 'single quoted' leaky-lowercase 'stray secret'; do
+  grep -qF -- "$secret" <<<"$OUT" && { LEAK=1; echo "leaked: $secret"; }
+done
+[ $LEAK -eq 0 ] && ok "no value material in output" || fail "value material leaked"
+
+# Temp-file cleanup: fake scp on PATH, empty TMPDIR, list the directory afterwards.
+mkdir "$WORK/bin" "$WORK/tmp"
+cat > "$WORK/bin/scp" <<EOS
+#!/usr/bin/env bash
+cp "$WORK/fixture.env" "\${@: -1}"
+[ -n "\${FAKE_SCP_FAIL:-}" ] && exit 1
+exit 0
+EOS
+chmod +x "$WORK/bin/scp"
+
+PATH="$WORK/bin:$PATH" TMPDIR="$WORK/tmp" python3 -I "$SCRIPT" lucos_repos >/dev/null; RC=$?
+[ $RC -eq 0 ] && [ -z "$(ls -A "$WORK/tmp")" ] && ok "temp file removed after success" || fail "success path: rc=$RC, leftovers: $(ls -A "$WORK/tmp")"
+PATH="$WORK/bin:$PATH" TMPDIR="$WORK/tmp" FAKE_SCP_FAIL=1 python3 -I "$SCRIPT" lucos_repos >/dev/null 2>&1; RC=$?
+[ $RC -ne 0 ] && [ -z "$(ls -A "$WORK/tmp")" ] && ok "temp file removed after scp failure" || fail "failure path: rc=$RC, leftovers: $(ls -A "$WORK/tmp")"
+
+python3 -I "$SCRIPT" 'bad;arg' >/dev/null 2>&1; [ $? -eq 2 ] && ok "rejects unsafe system argument" || fail "accepted unsafe argument"
+
+echo "$PASS passed, $FAIL failed"
+[ $FAIL -eq 0 ]
