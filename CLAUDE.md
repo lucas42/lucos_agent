@@ -122,3 +122,9 @@ scp -P 2202 "creds.l42.eu:lucos_agent/development/.env" .
 RSA PEM keys are multi-line, but lucos_creds flattens values to a single line, replacing newlines with spaces. This affects both the base64 body of the key and the spaces that are legitimately part of the `-----BEGIN RSA PRIVATE KEY-----` / `-----END RSA PRIVATE KEY-----` markers.
 
 `get-token` handles this by parsing the header and footer markers out separately, then replacing spaces only in the base64 body before reassembling the key. A temporary file is used to pass the restored PEM to `openssl` (macOS's OpenSSL does not support `/dev/fd` process substitution).
+
+---
+
+## creds-shape
+
+`creds-shape <system> [environment]` is the only sanctioned way to inspect the *contents* of a creds file (environment defaults to `development`). It prints per variable only the name, value length, line count, empty flag and, for PEMs, the type and public-key SHA256 fingerprint — never any part of a value. Standard library plus `openssl` only; tests in `tests/creds-shape`.
