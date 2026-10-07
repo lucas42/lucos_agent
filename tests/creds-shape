@@ -55,7 +55,14 @@ PATH="$WORK/bin:$PATH" TMPDIR="$WORK/tmp" python3 -I "$SCRIPT" lucos_repos >/dev
 PATH="$WORK/bin:$PATH" TMPDIR="$WORK/tmp" FAKE_SCP_FAIL=1 python3 -I "$SCRIPT" lucos_repos >/dev/null 2>&1; RC=$?
 [ $RC -ne 0 ] && [ -z "$(ls -A "$WORK/tmp")" ] && ok "temp file removed after scp failure" || fail "failure path: rc=$RC, leftovers: $(ls -A "$WORK/tmp")"
 
-python3 -I "$SCRIPT" 'bad;arg' >/dev/null 2>&1; [ $? -eq 2 ] && ok "rejects unsafe system argument" || fail "accepted unsafe argument"
+# Unterminated quote must swallow the rest of the file, not expose base64-ish lines as names.
+printf 'OPEN="never closed\nQUJD=\nlower=zzz-leak\n' > "$WORK/open.env"
+OUT2="$(python3 -I "$SCRIPT" --file "$WORK/open.env")"
+if grep -qF -e QUJD -e zzz-leak <<<"$OUT2" || [ "$(grep -c '^OPEN ' <<<"$OUT2")" -ne 1 ] || ! grep -qF 'entries=1 ' <<<"$OUT2"; then fail "unterminated quote leaked or mis-parsed"; echo "$OUT2"; else ok "unterminated quote consumes to EOF"; fi
+
+for bad in .. . -x 'a;b'; do
+  python3 -I "$SCRIPT" "$bad" >/dev/null 2>&1; [ $? -eq 2 ] && ok "rejects argument '$bad'" || fail "accepted argument '$bad'"
+done
 
 echo "$PASS passed, $FAIL failed"
 [ $FAIL -eq 0 ]

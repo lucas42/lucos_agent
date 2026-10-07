@@ -10,10 +10,10 @@ Safety comes from limiting what is printed, not from the parser being right.
 """
 import base64, hashlib, os, re, signal, subprocess, sys, tempfile
 
-ENTRY = re.compile(r'^([^=\n]*)=("(?:[^"\\]|\\.)*"|\'[^\']*\'|[^\n]*)', re.M | re.S)
+ENTRY = re.compile(r'^([^=\n]*)=("(?:[^"\\]|\\.)*"|\'[^\']*\'|["\'][\s\S]*|[^\n]*)', re.M | re.S)
 NAME = re.compile(r'[A-Z_][A-Z0-9_]*')
 PEM_TYPE = re.compile(r'-----BEGIN ([A-Z ]+)-----')
-SAFE_ARG = re.compile(r'[A-Za-z0-9_.-]+')
+SAFE_ARG = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]*')
 
 
 def fingerprint(value):
