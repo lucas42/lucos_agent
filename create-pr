@@ -9,6 +9,9 @@
 # Pass --draft to open the PR in draft state. Reviewer requests are skipped
 # for draft PRs (they are not yet ready for review).
 #
+# Strips the harness's "Generated with [Claude Code]" footer line from the body
+# (forbidden by CLAUDE.md); warns on stderr, never blocks.
+#
 # Outputs: the PR URL (html_url) on success.
 # Exit code: 0 on success, non-zero on error.
 
@@ -48,6 +51,18 @@ done
 [[ -z "$BODY_FILE" ]] && { echo "Error: --body-file is required" >&2; usage; }
 [[ -z "$HEAD"      ]] && { echo "Error: --head is required"      >&2; usage; }
 [[ ! -f "$BODY_FILE" ]] && { echo "Error: body file '$BODY_FILE' not found" >&2; exit 2; }
+
+# Strip the Claude Code attribution footer, as git-hooks/commit-msg does for commit trailers.
+FOOTER_PATTERN='^(🤖 )?Generated with \[Claude Code\]\('
+if grep -qE "$FOOTER_PATTERN" "$BODY_FILE"; then
+    CLEAN_BODY="$(mktemp)"
+    trap 'rm -f "$CLEAN_BODY"' EXIT
+    grep -vE "$FOOTER_PATTERN" "$BODY_FILE" > "$CLEAN_BODY" || true
+    # Trim trailing blank lines left behind by the removed footer
+    sed -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$CLEAN_BODY" > "$CLEAN_BODY.trim" && mv "$CLEAN_BODY.trim" "$CLEAN_BODY"
+    BODY_FILE="$CLEAN_BODY"
+    echo "create-pr: stripped a Claude Code attribution footer from the PR body (forbidden by CLAUDE.md)" >&2
+fi
 
 # Step 1: Create the PR
 PR_RESPONSE=$(

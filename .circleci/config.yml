@@ -29,6 +29,9 @@ jobs:
       - run:
           name: Run tests/commit-msg-hook
           command: tests/commit-msg-hook/run-tests.sh
+      - run:
+          name: Run tests/create-pr
+          command: tests/create-pr/run-tests.sh
 
 workflows:
   # Runs the tests/ suite on every push, on all branches — not gated to main,
