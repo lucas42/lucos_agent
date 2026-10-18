@@ -86,8 +86,22 @@ if [[ "$DRAFT" == "true" ]]; then
     echo "Draft PR — skipping reviewer request until marked ready" >&2
 elif ! "$SCRIPT_DIR/check-unsupervised" "$REPO" > /dev/null 2>&1; then
     echo "Repo is supervised — requesting lucas42 as reviewer on PR #$PR_NUMBER" >&2
-    "$SCRIPT_DIR/gh-as-agent" --app "$APP" \
-        "repos/lucas42/$REPO/pulls/$PR_NUMBER/requested_reviewers" \
-        --method POST \
-        --field "reviewers[]=lucas42" > /dev/null
+    REVIEWERS_PATH="repos/lucas42/$REPO/pulls/$PR_NUMBER"
+    requested=false
+    for attempt in 1 2 3; do
+        "$SCRIPT_DIR/gh-as-agent" --app "$APP" "$REVIEWERS_PATH/requested_reviewers" \
+            --method POST --field "reviewers[]=lucas42" > /dev/null || true
+        # Verify rather than trust the POST: it can succeed server-side while the client errors.
+        if "$SCRIPT_DIR/gh-as-agent" --app "$APP" "$REVIEWERS_PATH" \
+            --jq '.requested_reviewers[].login' 2>/dev/null | grep -qx lucas42; then
+            requested=true
+            break
+        fi
+        echo "create-pr: reviewer request attempt $attempt failed; retrying" >&2
+        sleep 2
+    done
+    if [[ "$requested" != "true" ]]; then
+        echo "create-pr: ERROR: PR $PR_URL was created but lucas42 could NOT be added as reviewer — add him manually" >&2
+        exit 1
+    fi
 fi
