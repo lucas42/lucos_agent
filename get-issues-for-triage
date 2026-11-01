@@ -42,6 +42,14 @@
 #      state, probably left by a failed or incomplete triage action.
 #   5. Status = Ready where lucas42 has commented more recently than the most
 #      recent lucos-issue-manager[bot] comment — lucas42 may have revised scope.
+#   5b. Status = Ready where another persona bot (a lucos-* entry in
+#       personas.json, other than lucos-issue-manager and the ticket's own
+#       Owner) has commented more recently than the most recent
+#       lucos-issue-manager[bot] comment — it may be challenging the spec
+#       (lucas42/lucos_agent#96). The Owner is excluded so a persona's own
+#       progress/evidence comments don't resurface its ticket. Other logins
+#       (e.g. external users) never trigger this. An issue-manager comment
+#       clears it.
 #
 # Exclusion: Status = Done or Blocked are never surfaced for triage.
 #
@@ -58,6 +66,7 @@ TOKEN=$("$SCRIPT_DIR/get-token" --app "lucos-issue-manager")
 
 ISSUE_MANAGER_TOKEN="$TOKEN" \
 GH_PROJECTS="$SCRIPT_DIR/gh-projects" \
+PERSONAS_JSON="$SCRIPT_DIR/personas.json" \
 python3 << 'PYEOF'
 
 import json, os, subprocess, sys
@@ -65,6 +74,14 @@ from urllib.parse import quote
 
 TOKEN      = os.environ["ISSUE_MANAGER_TOKEN"]
 GH_PROJECTS = os.environ["GH_PROJECTS"]
+IM_LOGIN    = "lucos-issue-manager[bot]"
+
+# bot login -> persona name, for criterion 5b (everything but the issue manager).
+with open(os.environ["PERSONAS_JSON"]) as f:
+    PERSONA_LOGINS = {
+        p["bot_name"]: name for name, p in json.load(f).items()
+        if name.startswith("lucos-") and name != "lucos-issue-manager"
+    }
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -224,26 +241,29 @@ def should_include_refining(repo, number, comment_count, issue_reaction_count):
 
     return False
 
-def should_include_ready(repo, number, comment_count):
-    """Criterion 5: surface if lucas42 has commented more recently than issue manager.
+def should_include_ready(repo, number, comment_count, owner):
+    """Criteria 5 / 5b: surface a Ready issue that has had activity since the issue manager last commented.
 
-    Returns True when lucas42 has at least one comment AND either:
-    - lucos-issue-manager[bot] has never commented, OR
-    - lucas42's most recent comment is newer than the issue manager's.
+    Returns True when the issue manager has never commented or its latest comment
+    is older than either:
+    - lucas42's latest comment (criterion 5), or
+    - the latest comment from a persona bot other than the Owner (criterion 5b).
     """
     if comment_count == 0:
         return False  # No activity — nothing to surface
 
     comments = fetch_comments(repo, number)
-    lucas42_latest = max(
-        (c["created_at"] for c in comments if c.get("user", {}).get("login") == "lucas42"),
-        default="",
-    )
-    im_latest = max(
-        (c["created_at"] for c in comments if c.get("user", {}).get("login") == "lucos-issue-manager[bot]"),
-        default="",
-    )
-    return bool(lucas42_latest) and (not im_latest or lucas42_latest > im_latest)
+
+    def latest(match):
+        return max(
+            (c["created_at"] for c in comments if match(c.get("user", {}).get("login", ""))),
+            default="",
+        )
+
+    im_latest = latest(lambda login: login == IM_LOGIN)
+    lucas42_latest = latest(lambda login: login == "lucas42")
+    other_latest = latest(lambda login: login in PERSONA_LOGINS and PERSONA_LOGINS[login] != owner)
+    return any(t and (not im_latest or t > im_latest) for t in (lucas42_latest, other_latest))
 
 # ── Phase 1: Project board scan (primary) ─────────────────────────────────────
 
@@ -285,8 +305,8 @@ for node in board_nodes:
         include = should_include_refining(repo, number, comment_count, reaction_count)
 
     elif status == READY_STATUS:
-        # Criterion 5: ready for dispatch — surface if lucas42 has revised scope
-        include = should_include_ready(repo, number, comment_count)
+        # Criteria 5 / 5b: ready for dispatch — surface if lucas42 or another persona has commented since
+        include = should_include_ready(repo, number, comment_count, owner)
 
     elif (owner or priority) and not status:
         include = True  # Criterion 4: has fields but no Status — inconsistent state

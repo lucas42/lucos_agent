@@ -32,6 +32,9 @@ jobs:
       - run:
           name: Run tests/create-pr
           command: tests/create-pr/run-tests.sh
+      - run:
+          name: Run tests/get-issues-for-triage
+          command: tests/get-issues-for-triage/run-tests.sh
 
 workflows:
   # Runs the tests/ suite on every push, on all branches — not gated to main,
